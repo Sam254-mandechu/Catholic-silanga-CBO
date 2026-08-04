@@ -1,36 +1,47 @@
 import { motion } from 'framer-motion';
 import { Quote, Star, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
-
-const testimonials = [
-  {
-    name: 'Mary Achieng',
-    role: 'Community Beneficiary',
-    quote:
-      'Through the CBO scholarship program, my daughter is now in secondary school. The transformation in her confidence and our family is truly a blessing.',
-    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=200&q=80',
-    rating: 5,
-  },
-  {
-    name: 'Fr. Daniel Otieno',
-    role: 'Parish Priest',
-    quote:
-      'The CBO brings the Gospel to life through tangible action. Their work embodies Catholic Social Teaching and serves as a model for parishes.',
-    avatar: 'https://images.unsplash.com/photo-1547425260-76bcadfb4f2c?auto=format&fit=crop&w=200&q=80',
-    rating: 5,
-  },
-  {
-    name: 'James Owino',
-    role: 'Volunteer Coordinator',
-    quote:
-      'Volunteering here has given my life deeper purpose. We are not just serving — we are building a community of love that will outlast us.',
-    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&q=80',
-    rating: 5,
-  },
-];
+import { Megaphone, ArrowRight } from 'lucide-react';
+import { Link } from 'react-router-dom';
 
 export const Testimonials: React.FC = () => {
   const [index, setIndex] = useState(0);
+
+  // No testimonials yet — admin will add them. (Future: load from a
+  // public `testimonials` table once the schema is extended.)
+  const testimonials: { name: string; role: string; quote: string; avatar: string; rating: number }[] = [];
+
+  if (testimonials.length === 0) {
+    return (
+      <section className="py-20 bg-gradient-to-b from-primary/5 to-background">
+        <div className="container mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center mb-12">
+            <p className="text-sm font-semibold text-primary tracking-wider uppercase mb-2">
+              Voices of Our Community
+            </p>
+            <h2 className="font-heading text-3xl sm:text-4xl lg:text-5xl font-bold text-foreground">
+              Stories of Impact
+            </h2>
+          </div>
+          <div className="max-w-2xl mx-auto rounded-2xl bg-card border p-12 text-center">
+            <Megaphone className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
+            <h3 className="font-semibold text-xl mb-2">No stories shared yet</h3>
+            <p className="text-sm text-muted-foreground mb-6">
+              Testimonials from beneficiaries, volunteers, and partners will appear here
+              once the admin adds them from the dashboard.
+            </p>
+            <Link
+              to="/contact"
+              className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+            >
+              Share your story
+              <ArrowRight className="w-4 h-4" />
+            </Link>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="py-20 bg-gradient-to-b from-primary/5 to-background">

@@ -78,7 +78,7 @@ export const AboutPage: React.FC = () => {
             >
               <div className="aspect-[4/3] rounded-2xl overflow-hidden shadow-2xl">
                 <img
-                  src="https://images.unsplash.com/photo-1469571486292-0ba58a3f068b?auto=format&fit=crop&w=1200&q=80"
+                  src="data:image/svg+xml;utf8,<svg xmlns=&apos;http://www.w3.org/2000/svg&apos; viewBox=&apos;0 0 24 24&apos; fill=&apos;none&apos; stroke=&apos;currentColor&apos; stroke-width=&apos;1.5&apos;><rect x=&apos;3&apos; y=&apos;3&apos; width=&apos;18&apos; height=&apos;18&apos; rx=&apos;2&apos;/><circle cx=&apos;9&apos; cy=&apos;9&apos; r=&apos;2&apos;/><path d=&apos;M21 15l-5-5L5 21&apos;/></svg>"
                   alt="Catholic Silanga CBO history"
                   className="w-full h-full object-cover"
                 />

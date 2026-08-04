@@ -16,7 +16,7 @@ const statusColors: Record<Project['status'], string> = {
 };
 
 const imageFallback =
-  'https://images.unsplash.com/photo-1488521787991-ed7bbaae773c?auto=format&fit=crop&w=800&q=80';
+  'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7h18M3 12h18M3 17h18"/></svg>';
 
 export const FeaturedProjects: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);

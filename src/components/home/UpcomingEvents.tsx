@@ -18,7 +18,7 @@ const categoryColors: Record<string, string> = {
 };
 
 const fallbackImage =
-  'https://images.unsplash.com/photo-1517457373958-b7bdd4587205?auto=format&fit=crop&w=800&q=80';
+  'data:image/svg+xml;utf8,<svg xmlns=&apos;http://www.w3.org/2000/svg&apos; viewBox=&apos;0 0 24 24&apos; fill=&apos;none&apos; stroke=&apos;currentColor&apos; stroke-width=&apos;1.5&apos;><rect x=&apos;3&apos; y=&apos;3&apos; width=&apos;18&apos; height=&apos;18&apos; rx=&apos;2&apos;/><circle cx=&apos;9&apos; cy=&apos;9&apos; r=&apos;2&apos;/><path d=&apos;M21 15l-5-5L5 21&apos;/></svg>';
 
 const EventCard: React.FC<{ event: Event; index: number }> = ({ event, index }) => {
   const colorClass = categoryColors[event.category] || categoryColors.default;

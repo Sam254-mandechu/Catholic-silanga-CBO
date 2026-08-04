@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Mail, Phone } from 'lucide-react';
+import { Mail, Phone, Users as UsersIcon } from 'lucide-react';
 import { PageHeader } from '../components/common/PageHeader';
 import { Loader } from '../components/common/Loader';
 import { Card, CardContent } from '../components/ui/Card';
@@ -8,7 +9,7 @@ import { getLeadership } from '../services/supabaseData';
 import type { Leadership } from '../types/database';
 
 const fallbackAvatar =
-  'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=400&q=80';
+  'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a8 8 0 0 1 16 0v1"/></svg>';
 
 const LeadershipCard: React.FC<{ leader: Leadership; index: number }> = ({ leader, index }) => {
   return (
@@ -85,78 +86,6 @@ export const LeadershipPage: React.FC = () => {
     };
   }, []);
 
-  // Static fallback so the page is never empty during initial wiring
-  const placeholders: Leadership[] = [
-    {
-      id: '1',
-      name: 'Sr. Margaret Akinyi',
-      position: 'Chairperson',
-      bio: 'A visionary leader who has served the CBO for over 15 years, guiding our mission with wisdom and unwavering faith.',
-      photo: 'https://images.unsplash.com/photo-1573497019418-b400bb3ab074?auto=format&fit=crop&w=400&q=80',
-      email: 'chairperson@catholicsilanga.org',
-      phone: '+254 700 000 001',
-      display_order: 1,
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: '2',
-      name: 'Fr. Daniel Otieno',
-      position: 'Patron',
-      bio: 'Our parish priest provides spiritual guidance and counsel, ensuring every initiative aligns with Catholic values.',
-      photo: 'https://images.unsplash.com/photo-1547425260-76bcadfb4f2c?auto=format&fit=crop&w=400&q=80',
-      email: 'patron@catholicsilanga.org',
-      phone: '',
-      display_order: 2,
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: '3',
-      name: 'Mr. James Owino',
-      position: 'Vice Chairperson',
-      bio: 'A community development professional with deep ties to Silanga, James leads our strategic planning.',
-      photo: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80',
-      email: 'vice@catholicsilanga.org',
-      phone: '+254 700 000 003',
-      display_order: 3,
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: '4',
-      name: 'Mrs. Grace Nyambura',
-      position: 'Secretary',
-      bio: 'A retired educator, Grace manages our records and communications with meticulous care.',
-      photo: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=400&q=80',
-      email: 'secretary@catholicsilanga.org',
-      phone: '+254 700 000 004',
-      display_order: 4,
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: '5',
-      name: 'Mr. Peter Wekesa',
-      position: 'Treasurer',
-      bio: 'A certified accountant who ensures financial transparency and responsible stewardship of all donations.',
-      photo: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=400&q=80',
-      email: 'treasurer@catholicsilanga.org',
-      phone: '',
-      display_order: 5,
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: '6',
-      name: 'Ms. Linda Atieno',
-      position: 'Youth Coordinator',
-      bio: 'A passionate youth advocate who empowers young people through mentorship and skills training.',
-      photo: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=400&q=80',
-      email: 'youth@catholicsilanga.org',
-      phone: '+254 700 000 006',
-      display_order: 6,
-      created_at: new Date().toISOString(),
-    },
-  ];
-
-  const displayLeaders = leaders.length > 0 ? leaders : placeholders;
-
   return (
     <>
       <PageHeader
@@ -169,6 +98,21 @@ export const LeadershipPage: React.FC = () => {
         <div className="container mx-auto px-4 sm:px-6 lg:px-8">
           {loading ? (
             <Loader message="Loading leadership..." />
+          ) : leaders.length === 0 ? (
+            <div className="max-w-2xl mx-auto rounded-2xl border border-dashed bg-card/50 p-12 text-center">
+              <UsersIcon className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
+              <h3 className="font-semibold text-xl mb-2">Leadership profiles will appear here</h3>
+              <p className="text-sm text-muted-foreground mb-6">
+                The administrator can add your chairperson, secretary, treasurer, and other
+                leadership bios from the admin dashboard.
+              </p>
+              <Link
+                to="/admin-dashboard"
+                className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+              >
+                Go to admin dashboard →
+              </Link>
+            </div>
           ) : (
             <>
               <div className="text-center mb-12 max-w-3xl mx-auto">
@@ -178,16 +122,10 @@ export const LeadershipPage: React.FC = () => {
                 </p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                {displayLeaders.map((leader, idx) => (
+                {leaders.map((leader, idx) => (
                   <LeadershipCard key={leader.id} leader={leader} index={idx} />
                 ))}
               </div>
-
-              {leaders.length === 0 && (
-                <p className="text-center text-xs text-muted-foreground mt-8 italic">
-                  Displaying sample leadership. Connect Firebase to load live data.
-                </p>
-              )}
             </>
           )}
         </div>

@@ -11,7 +11,7 @@ import type { Profile } from '../types/database';
 import { HIERARCHY_ORDER } from '../types/database';
 
 const fallbackAvatar =
-  'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=400&q=80';
+  'data:image/svg+xml;utf8,<svg xmlns=&apos;http://www.w3.org/2000/svg&apos; viewBox=&apos;0 0 24 24&apos; fill=&apos;none&apos; stroke=&apos;currentColor&apos; stroke-width=&apos;1.5&apos;><rect x=&apos;3&apos; y=&apos;3&apos; width=&apos;18&apos; height=&apos;18&apos; rx=&apos;2&apos;/><circle cx=&apos;9&apos; cy=&apos;9&apos; r=&apos;2&apos;/><path d=&apos;M21 15l-5-5L5 21&apos;/></svg>';
 
 const MemberCard: React.FC<{ member: Profile; rank: number }> = ({ member, rank }) => {
   return (

@@ -11,7 +11,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
   title,
   subtitle,
   description,
-  bgImage = 'https://images.unsplash.com/photo-1518709268805-4e9042af2176?auto=format&fit=crop&w=2000&q=80',
+  bgImage = 'data:image/svg+xml;utf8,<svg xmlns=&apos;http://www.w3.org/2000/svg&apos; viewBox=&apos;0 0 2000 600&apos;><rect width=&apos;2000&apos; height=&apos;600&apos; fill=&apos;%23a82524&apos;/></svg>',
 }) => {
   return (
     <section className="relative pt-32 pb-20 overflow-hidden">

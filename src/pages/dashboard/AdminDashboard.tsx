@@ -728,7 +728,7 @@ const ProjectsTab: React.FC<{
             <div key={p.id} className="rounded-lg border p-3 hover:shadow-md transition-shadow">
               <div className="flex gap-3">
                 <img
-                  src={(p.image ?? '') || 'https://images.unsplash.com/photo-1488521787991-ed7bbaae773c?auto=format&fit=crop&w=200&q=60'}
+                  src={(p.image ?? '') || 'data:image/svg+xml;utf8,<svg xmlns=&apos;http://www.w3.org/2000/svg&apos; viewBox=&apos;0 0 24 24&apos; fill=&apos;none&apos; stroke=&apos;currentColor&apos; stroke-width=&apos;1.5&apos;><rect x=&apos;3&apos; y=&apos;3&apos; width=&apos;18&apos; height=&apos;18&apos; rx=&apos;2&apos;/><circle cx=&apos;9&apos; cy=&apos;9&apos; r=&apos;2&apos;/><path d=&apos;M21 15l-5-5L5 21&apos;/></svg>'}
                   className="w-20 h-20 rounded object-cover"
                   alt={p.title}
                 />

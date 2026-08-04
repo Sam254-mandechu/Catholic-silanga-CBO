@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { ArrowRight, X } from 'lucide-react';
+import { ArrowRight, X, Image as ImageIcon } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Loader } from '../common/Loader';
 import { getGalleryImages } from '../../services/supabaseData';
 import type { GalleryImage } from '../../types/database';
 
-const fallbackImage = 'https://images.unsplash.com/photo-1509099836639-18ba1795211d?auto=format&fit=crop&w=800&q=80';
+const fallbackImage =
+  'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>';
 
 export const GalleryPreview: React.FC = () => {
   const [images, setImages] = useState<GalleryImage[]>([]);
@@ -33,19 +34,7 @@ export const GalleryPreview: React.FC = () => {
     };
   }, []);
 
-  // Placeholder static demo images in case no data yet — keeps the layout populated
-  const placeholders: GalleryImage[] = Array.from({ length: 8 }).map((_, i) => ({
-    id: `placeholder-${i}`,
-    url: `https://images.unsplash.com/photo-${
-      ['1509099836639-18ba1795211d', '1469571486292-0ba58a3f068b', '1517457373958-b7bdd4587205', '1542816417-0983c9c9ad53', '1582213782179-e0d53f98f2ca', '1488521787991-ed7bbaae773c', '1532009324734-20a7a5813719', '1497250681960-ef0a4e2b95b6'][i]
-    }?auto=format&fit=crop&w=600&q=60`,
-    title: '',
-    category: '',
-    uploaded_at: new Date().toISOString(),
-    uploaded_by: null,
-  }));
-
-  const displayImages = images.length > 0 ? images : placeholders;
+  const displayImages = images;
 
   return (
     <section className="py-20 bg-background">
@@ -71,6 +60,20 @@ export const GalleryPreview: React.FC = () => {
 
         {loading ? (
           <Loader />
+        ) : displayImages.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border bg-card/50 p-12 text-center">
+            <ImageIcon className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
+            <h3 className="font-semibold text-xl mb-2">Gallery preview will appear here</h3>
+            <p className="text-sm text-muted-foreground mb-6 max-w-md mx-auto">
+              Once photos are uploaded from the admin dashboard, the latest ones will appear here.
+            </p>
+            <Link
+              to="/admin-dashboard"
+              className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+            >
+              Go to admin dashboard →
+            </Link>
+          </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
             {displayImages.map((img, idx) => (

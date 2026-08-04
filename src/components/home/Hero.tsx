@@ -50,7 +50,7 @@ export const Hero: React.FC = () => {
         className="absolute inset-0 bg-cover bg-center bg-no-repeat"
         style={{
           backgroundImage:
-            'url("https://images.unsplash.com/photo-1518709268805-4e9042af2176?auto=format&fit=crop&w=2000&q=80")',
+            'url("data:image/svg+xml;utf8,<svg xmlns=&apos;http://www.w3.org/2000/svg&apos; viewBox=&apos;0 0 1920 800&apos;><defs><linearGradient id=&apos;g&apos; x1=&apos;0&apos; y1=&apos;0&apos; x2=&apos;1&apos; y2=&apos;1&apos;><stop offset=&apos;0&apos; stop-color=&apos;%23a82524&apos;/><stop offset=&apos;1&apos; stop-color=&apos;%23f59e0b&apos;/></linearGradient></defs><rect width=&apos;1920&apos; height=&apos;800&apos; fill=&apos;url(%23g)&apos;/></svg>")',
         }}
       >
         <div className="absolute inset-0 bg-gradient-to-br from-primary/95 via-primary/80 to-accent/80" />
