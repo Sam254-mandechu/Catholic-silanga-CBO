@@ -16,6 +16,7 @@ const navLinks = [
   { name: 'Projects', path: '/projects' },
   { name: 'Gallery', path: '/gallery' },
   { name: 'News & Events', path: '/news-events' },
+  { name: 'Meetings', path: '/meetings', requiresAuth: true },
   { name: 'Contributions', path: '/contributions' },
   { name: 'Contact', path: '/contact' },
 ];
@@ -51,7 +52,13 @@ export const Navbar: React.FC = () => {
     }
   };
 
-  const dashboardPath = profile?.role === 'admin' ? '/admin-dashboard' : '/member-dashboard';
+  const dashboardPath = profile?.role === 'admin'
+    ? '/admin-dashboard'
+    : profile?.role === 'secretary'
+      ? '/secretary-portal'
+      : profile?.role === 'treasurer'
+        ? '/treasurer-portal'
+        : '/member-dashboard';
 
   return (
     <header

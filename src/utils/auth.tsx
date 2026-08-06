@@ -72,13 +72,41 @@ export function RedirectIfAuth({ children }: Props) {
 }
 
 /**
+ * Gate for role-specific portals (secretary / treasurer).
+ * Pass `allow={['secretary']}` to require that role. Admin is always allowed.
+ * Non-matching users are sent to their member dashboard.
+ */
+export function RequireRole({
+  allow,
+  children,
+}: {
+  allow: Array<'admin' | 'secretary' | 'treasurer' | 'member' | 'moderator'>;
+  children: ReactNode;
+}) {
+  const { user, profile, loading } = useAuth();
+
+  if (loading) return <LoadingScreen />;
+  if (!user) return <Navigate to="/login" replace />;
+  if (!profile) return <Navigate to="/login" replace />;
+
+  const role = profile.role;
+  if (role === 'admin' || allow.includes(role)) {
+    return <>{children}</>;
+  }
+  return <Navigate to="/member-dashboard" replace />;
+}
+
+/**
  * Decide where to send the user right after a successful login, based on role.
  * Admins go to /admin-dashboard; everyone else goes to /member-dashboard,
  * unless they were originally bounced from a specific protected route.
  */
 export function defaultDashboardFor(profile: { role: string } | null | undefined, fallbackPath?: string): string {
   if (fallbackPath) return fallbackPath;
-  if (profile?.role === 'admin') return '/admin-dashboard';
+  const role = profile?.role;
+  if (role === 'admin') return '/admin-dashboard';
+  if (role === 'secretary') return '/secretary-portal';
+  if (role === 'treasurer') return '/treasurer-portal';
   return '/member-dashboard';
 }
 

@@ -11,13 +11,16 @@ import { NewsEventsPage } from './pages/NewsEventsPage';
 import { ContactPage } from './pages/ContactPage';
 import { MembersPage } from './pages/MembersPage';
 import { ContributionsPage } from './pages/ContributionsPage';
+import { MeetingsPage } from './pages/MeetingsPage';
+import { SecretaryPortal } from './pages/SecretaryPortal';
+import { TreasurerPortal } from './pages/TreasurerPortal';
 import { RegisterPage } from './pages/auth/RegisterPage';
 import { LoginPage } from './pages/auth/LoginPage';
 import { ForgotPasswordPage } from './pages/auth/ForgotPasswordPage';
 import { MemberDashboard } from './pages/dashboard/MemberDashboard';
 import { AdminDashboard } from './pages/dashboard/AdminDashboard';
 import { AuthProvider } from './contexts/AuthContext';
-import { RequireAuth, RequireAdmin } from './utils/auth';
+import { RequireAuth, RequireAdmin, RequireRole } from './utils/auth';
 
 function App() {
   return (
@@ -37,6 +40,14 @@ function App() {
               <Route path="/contact" element={<ContactPage />} />
               <Route path="/members" element={<MembersPage />} />
               <Route path="/contributions" element={<ContributionsPage />} />
+              <Route
+                path="/meetings"
+                element={
+                  <RequireAuth>
+                    <MeetingsPage />
+                  </RequireAuth>
+                }
+              />
 
               {/* Auth routes */}
               <Route path="/register" element={<RegisterPage />} />
@@ -59,6 +70,26 @@ function App() {
                     <RequireAdmin>
                       <AdminDashboard />
                     </RequireAdmin>
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/secretary-portal"
+                element={
+                  <RequireAuth>
+                    <RequireRole allow={['secretary']}>
+                      <SecretaryPortal />
+                    </RequireRole>
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/treasurer-portal"
+                element={
+                  <RequireAuth>
+                    <RequireRole allow={['treasurer']}>
+                      <TreasurerPortal />
+                    </RequireRole>
                   </RequireAuth>
                 }
               />

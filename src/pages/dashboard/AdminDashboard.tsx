@@ -46,6 +46,7 @@ import type {
   FinancialReport,
 } from '../../types/database';
 import { HIERARCHY_ORDER } from '../../types/database';
+import { Modal } from '../../components/common/Modal';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip,
   PieChart, Pie, Cell, CartesianGrid, Legend,
@@ -3263,31 +3264,3 @@ const ProjectModal: React.FC<{
             </div>
           );
         };
-
-        // ============================================================
-        // SHARED MODAL
-        // ============================================================
-        const Modal: React.FC<{
-          title: string;
-          onClose: () => void;
-          children: React.ReactNode;
-          wide?: boolean;
-        }> = ({ title, onClose, children, wide }) => (
-          <div
-            className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
-            onClick={onClose}
-          >
-            <div
-              className={`bg-card rounded-lg ${wide ? 'max-w-3xl' : 'max-w-md'} w-full my-8`}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between p-5 border-b">
-                <h3 className="font-heading text-lg font-bold">{title}</h3>
-                <button onClick={onClose} className="p-1 rounded hover:bg-muted" aria-label="Close">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-              <div className="p-5 max-h-[70vh] overflow-y-auto">{children}</div>
-            </div>
-          </div>
-        );

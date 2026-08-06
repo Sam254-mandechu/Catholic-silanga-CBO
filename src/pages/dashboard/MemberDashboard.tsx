@@ -5,19 +5,28 @@ import {
   Calendar, Edit3, LogOut, Mail, Phone, Award,
   Activity, ClipboardList, Heart, CheckCircle2, Clock,
   Send, Banknote, Bell, BookOpen,
+  CalendarDays, Vote, CheckCheck, User, Save,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input, Textarea } from '../../components/ui/Input';
+import { Modal } from '../../components/common/Modal';
 import { useAuth } from '../../contexts/AuthContext';
 import { toast } from '../../utils/toast';
 import {
   getTasksForMember, updateTaskStatus, getMyDonations,
   recordDonation, getPaymentMethods,
+  getUpcomingMeetings, getMeetingRsvps, submitMeetingRsvp,
+  getActivePolls, getPollOptions, getPollResults, castPollVote, getMyVote,
+  getMeetingAttendance,
 } from '../../services/supabaseData';
-import type { Task, Donation, PaymentMethod, TaskStatus } from '../../types/database';
+import type {
+  Task, Donation, PaymentMethod, TaskStatus,
+  Meeting, MeetingRsvp, MeetingAttendance,
+  Poll, PollOption, RsvpResponse,
+} from '../../types/database';
 
-type Tab = 'overview' | 'tasks' | 'contributions';
+type Tab = 'overview' | 'tasks' | 'contributions' | 'meetings' | 'polls' | 'attendance' | 'profile';
 
 export const MemberDashboard: React.FC = () => {
   const navigate = useNavigate();
@@ -51,6 +60,24 @@ export const MemberDashboard: React.FC = () => {
   });
   const [submittingContrib, setSubmittingContrib] = useState(false);
 
+  // v5 — Meetings / Polls / Attendance
+    const [upcomingMeetings, setUpcomingMeetings] = useState<Meeting[]>([]);
+    const [myRsvps, setMyRsvps] = useState<Record<string, MeetingRsvp>>({});
+    const [meetingsLoading, setMeetingsLoading] = useState(true);
+    const [rsvpModal, setRsvpModal] = useState<Meeting | null>(null);
+    const [rsvpResponse, setRsvpResponse] = useState<RsvpResponse>('attending');
+    const [rsvpReason, setRsvpReason] = useState('');
+    const [submittingRsvp, setSubmittingRsvp] = useState(false);
+
+    const [activePolls, setActivePolls] = useState<Poll[]>([]);
+    const [pollOptions, setPollOptions] = useState<Record<string, PollOption[]>>({});
+    const [pollResults, setPollResults] = useState<Record<string, { option: PollOption; votes: number }[]>>({});
+    const [myPollVotes, setMyPollVotes] = useState<Record<string, string>>({}); // poll_id -> option_id
+    const [pollsLoading, setPollsLoading] = useState(true);
+
+    const [myAttendance, setMyAttendance] = useState<MeetingAttendance[]>([]);
+    const [attendanceLoading, setAttendanceLoading] = useState(true);
+
   useEffect(() => {
     if (!user) navigate('/login');
   }, [user, navigate]);
@@ -67,21 +94,76 @@ export const MemberDashboard: React.FC = () => {
   const loadMemberData = React.useCallback(async () => {
     if (!profile?.id) return;
     try {
-      const [t, d, m] = await Promise.all([
+      const [t, d, m, meetings, polls] = await Promise.all([
         getTasksForMember(profile.id),
         getMyDonations(profile.id),
         getPaymentMethods(),
+        getUpcomingMeetings(20),
+        getActivePolls(),
       ]);
       setTasks(t);
       setMyDonations(d);
       setPaymentMethods(m.filter((mm) => mm.is_active));
+      setUpcomingMeetings(meetings);
+
+      // Fetch my RSVPs for upcoming meetings
+      const rsvpMap: Record<string, MeetingRsvp> = {};
+      await Promise.all(
+        meetings.map(async (meeting) => {
+          try {
+            const list = await getMeetingRsvps(meeting.id);
+            const mine = list.find((r) => r.member_id === profile.id);
+            if (mine) rsvpMap[meeting.id] = mine;
+          } catch { /* ignore */ }
+        }),
+      );
+      setMyRsvps(rsvpMap);
+
+      // Fetch poll options + my votes + results
+      const optsMap: Record<string, PollOption[]> = {};
+      const resMap: Record<string, { option: PollOption; votes: number }[]> = {};
+      const votesMap: Record<string, string> = {};
+      await Promise.all(
+        polls.map(async (poll) => {
+          try {
+            optsMap[poll.id] = await getPollOptions(poll.id);
+            resMap[poll.id] = await getPollResults(poll.id);
+            const myVote = await getMyVote(poll.id, profile.id);
+            if (myVote) votesMap[poll.id] = myVote.option_id;
+          } catch { /* ignore */ }
+        }),
+      );
+      setPollOptions(optsMap);
+            setPollResults(resMap);
+            setMyPollVotes(votesMap);
+            setActivePolls(polls);
+
+      // Fetch my attendance history from all recent meetings
+      try {
+        const allMeetings = await (await import('../../services/supabaseData')).getMeetings();
+        const attList: MeetingAttendance[] = [];
+        await Promise.all(
+          allMeetings.map(async (meeting) => {
+            try {
+              const list = await getMeetingAttendance(meeting.id);
+              const mine = list.find((a) => a.member_id === profile.id);
+              if (mine) attList.push(mine);
+            } catch { /* ignore */ }
+          }),
+        );
+        attList.sort((a, b) => (b.checked_in_at ?? '').localeCompare(a.checked_in_at ?? ''));
+        setMyAttendance(attList);
+      } catch { /* ignore */ }
     } catch (err) {
       console.warn('Failed to load member data', err);
     } finally {
       setTasksLoading(false);
       setDonationsLoading(false);
+      setMeetingsLoading(false);
+      setPollsLoading(false);
+      setAttendanceLoading(false);
     }
-  }, [profile?.id]);
+    }, [profile?.id]);
 
   useEffect(() => {
     loadMemberData();
@@ -200,11 +282,15 @@ export const MemberDashboard: React.FC = () => {
           </div>
 
           {/* Tabs */}
-          <div className="inline-flex flex-wrap gap-1 bg-card border rounded-lg p-1 mb-6">
-            {tabBtn('overview', 'Overview', Activity)}
-            {tabBtn('tasks', `Tasks (${myTasks.length})`, ClipboardList)}
-            {tabBtn('contributions', `Contributions (${myDonations.length})`, Heart)}
-          </div>
+                    <div className="inline-flex flex-wrap gap-1 bg-card border rounded-lg p-1 mb-6">
+                      {tabBtn('overview', 'Overview', Activity)}
+                      {tabBtn('tasks', `Tasks (${myTasks.length})`, ClipboardList)}
+                      {tabBtn('contributions', `Contributions (${myDonations.length})`, Heart)}
+                      {tabBtn('meetings', `Meetings (${upcomingMeetings.length})`, CalendarDays)}
+                      {tabBtn('polls', `Polls (${activePolls.length})`, Vote)}
+                      {tabBtn('attendance', `Attendance (${myAttendance.length})`, CheckCheck)}
+                      {tabBtn('profile', 'Profile', User)}
+                    </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Profile (always shown, sticky-ish) */}
@@ -547,17 +633,361 @@ export const MemberDashboard: React.FC = () => {
                               </span>
                             </div>
                           ))}
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                </>
-              )}
+                                                  </div>
+                                                )}
+                                              </CardContent>
+                                            </Card>
+                                          </>
+                                        )}
 
-            </div>
-          </div>
-        </motion.div>
-      </div>
-    </section>
-  );
-};
+                                        {/* === MEETINGS TAB === */}
+                                        {tab === 'meetings' && (
+                                          <Card>
+                                            <CardHeader>
+                                              <CardTitle className="flex items-center gap-2">
+                                                <CalendarDays className="w-5 h-5 text-primary" /> Upcoming Meetings
+                                              </CardTitle>
+                                            </CardHeader>
+                                            <CardContent className="space-y-3">
+                                              {meetingsLoading ? (
+                                                <div className="space-y-2">
+                                                  {Array.from({ length: 2 }).map((_, i) => (
+                                                    <div key={i} className="h-20 bg-muted animate-pulse rounded" />
+                                                  ))}
+                                                </div>
+                                              ) : upcomingMeetings.length === 0 ? (
+                                                <div className="text-center py-10">
+                                                  <CalendarDays className="w-10 h-10 text-muted-foreground mx-auto mb-2" />
+                                                  <p className="font-semibold mb-1">No upcoming meetings</p>
+                                                  <p className="text-sm text-muted-foreground">
+                                                    The secretary will schedule meetings soon.
+                                                  </p>
+                                                </div>
+                                              ) : (
+                                                upcomingMeetings.map((m) => {
+                                                  const myRsvp = myRsvps[m.id];
+                                                  return (
+                                                    <div key={m.id} className="rounded-lg border p-4">
+                                                      <div className="flex items-start justify-between gap-3 flex-wrap">
+                                                        <div className="flex-1 min-w-0">
+                                                          <div className="flex items-center gap-2 flex-wrap mb-1">
+                                                            <h4 className="font-bold">{m.title}</h4>
+                                                            <span className="text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                                                              {m.meeting_type}
+                                                            </span>
+                                                          </div>
+                                                          {m.description && (
+                                                            <p className="text-sm text-muted-foreground line-clamp-2">{m.description}</p>
+                                                          )}
+                                                          <p className="text-xs mt-2">
+                                                            <Clock className="w-3 h-3 inline" /> {new Date(m.scheduled_at).toLocaleString()}
+                                                          </p>
+                                                          <p className="text-xs">{m.location}</p>
+                                                          {myRsvp && (
+                                                            <div className="mt-2 text-xs">
+                                                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold ${
+                                                                myRsvp.response === 'attending' ? 'bg-success/15 text-success' :
+                                                                myRsvp.response === 'not_attending' ? 'bg-destructive/15 text-destructive' :
+                                                                'bg-gold-400/20 text-gold-700'
+                                                              }`}>
+                                                                Your RSVP: {myRsvp.response.replace('_', ' ')}
+                                                              </span>
+                                                            </div>
+                                                          )}
+                                                        </div>
+                                                        <Button
+                                                          size="sm"
+                                                          onClick={() => {
+                                                            setRsvpModal(m);
+                                                            setRsvpResponse(myRsvp?.response ?? 'attending');
+                                                            setRsvpReason(myRsvp?.reason ?? '');
+                                                          }}
+                                                          leftIcon={<Send className="w-3 h-3" />}
+                                                        >
+                                                          {myRsvp ? 'Update RSVP' : 'RSVP'}
+                                                        </Button>
+                                                      </div>
+                                                    </div>
+                                                  );
+                                                })
+                                              )}
+                                            </CardContent>
+                                          </Card>
+                                        )}
+
+                                        {/* === POLLS TAB === */}
+                                        {tab === 'polls' && (
+                                          <Card>
+                                            <CardHeader>
+                                              <CardTitle className="flex items-center gap-2">
+                                                <Vote className="w-5 h-5 text-primary" /> Active Polls
+                                              </CardTitle>
+                                            </CardHeader>
+                                            <CardContent className="space-y-3">
+                                              {pollsLoading ? (
+                                                <div className="space-y-2">
+                                                  {Array.from({ length: 2 }).map((_, i) => (
+                                                    <div key={i} className="h-20 bg-muted animate-pulse rounded" />
+                                                  ))}
+                                                </div>
+                                              ) : activePolls.length === 0 ? (
+                                                <div className="text-center py-10">
+                                                  <Vote className="w-10 h-10 text-muted-foreground mx-auto mb-2" />
+                                                  <p className="font-semibold mb-1">No active polls</p>
+                                                  <p className="text-sm text-muted-foreground">
+                                                    Polls will appear here when the secretary opens one.
+                                                  </p>
+                                                </div>
+                                              ) : (
+                                                activePolls.map((poll) => {
+                                                  const opts = pollOptions[poll.id] ?? [];
+                                                  const results = pollResults[poll.id] ?? [];
+                                                  const myChoice = myPollVotes[poll.id];
+                                                  const totalVotes = results.reduce((s, r) => s + r.votes, 0);
+                                                  return (
+                                                    <div key={poll.id} className="rounded-lg border p-4">
+                                                      <h4 className="font-bold mb-1">{poll.title}</h4>
+                                                      {poll.description && (
+                                                        <p className="text-sm text-muted-foreground mb-2">{poll.description}</p>
+                                                      )}
+                                                      <p className="text-xs text-muted-foreground mb-3">
+                                                        <Clock className="w-3 h-3 inline" /> Closes {new Date(poll.closes_at).toLocaleString()}
+                                                        · {totalVotes} vote{totalVotes === 1 ? '' : 's'}
+                                                      </p>
+                                                      <div className="space-y-2">
+                                                        {opts.map((opt) => {
+                                                          const isMine = myChoice === opt.id;
+                                                          const count = results.find((r) => r.option.id === opt.id)?.votes ?? 0;
+                                                          const pct = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0;
+                                                          return (
+                                                            <div key={opt.id}>
+                                                              <button
+                                                                disabled={!!myChoice}
+                                                                onClick={async () => {
+                                                                  try {
+                                                                    await castPollVote(poll.id, opt.id);
+                                                                    setMyPollVotes({ ...myPollVotes, [poll.id]: opt.id });
+                                                                    const refreshed = await getPollResults(poll.id);
+                                                                    setPollResults({ ...pollResults, [poll.id]: refreshed });
+                                                                    toast.success('Vote cast');
+                                                                  } catch (err: any) {
+                                                                    toast.error(err?.message || 'Failed to vote');
+                                                                  }
+                                                                }}
+                                                                className={`w-full text-left p-3 rounded-lg border transition-colors ${
+                                                                  isMine ? 'border-primary bg-primary/5' :
+                                                                  myChoice ? 'opacity-60' : 'hover:bg-primary/5 cursor-pointer'
+                                                                }`}
+                                                              >
+                                                                <div className="flex items-center justify-between mb-1">
+                                                                  <span className="font-medium">{opt.label}</span>
+                                                                  {isMine && <CheckCircle2 className="w-4 h-4 text-primary" />}
+                                                                </div>
+                                                                {myChoice && (
+                                                                  <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                                                                    <div className="h-full bg-primary" style={{ width: `${pct}%` }} />
+                                                                  </div>
+                                                                )}
+                                                                {myChoice && (
+                                                                  <p className="text-xs text-muted-foreground mt-1">{pct}% ({count})</p>
+                                                                )}
+                                                              </button>
+                                                            </div>
+                                                          );
+                                                        })}
+                                                      </div>
+                                                    </div>
+                                                  );
+                                                })
+                                              )}
+                                            </CardContent>
+                                          </Card>
+                                        )}
+
+                                        {/* === ATTENDANCE TAB === */}
+                                        {tab === 'attendance' && (
+                                          <Card>
+                                            <CardHeader>
+                                              <CardTitle className="flex items-center gap-2">
+                                                <CheckCheck className="w-5 h-5 text-primary" /> My Attendance
+                                              </CardTitle>
+                                            </CardHeader>
+                                            <CardContent className="space-y-3">
+                                              {attendanceLoading ? (
+                                                <div className="space-y-2">
+                                                  {Array.from({ length: 2 }).map((_, i) => (
+                                                    <div key={i} className="h-16 bg-muted animate-pulse rounded" />
+                                                  ))}
+                                                </div>
+                                              ) : myAttendance.length === 0 ? (
+                                                <div className="text-center py-10">
+                                                  <CheckCheck className="w-10 h-10 text-muted-foreground mx-auto mb-2" />
+                                                  <p className="font-semibold mb-1">No attendance recorded yet</p>
+                                                  <p className="text-sm text-muted-foreground">
+                                                    When the secretary marks your attendance, it'll appear here.
+                                                  </p>
+                                                </div>
+                                              ) : (
+                                                myAttendance.map((a) => (
+                                                  <div key={a.id} className="flex items-center justify-between p-3 rounded-lg border">
+                                                    <div>
+                                                      <p className="text-sm font-medium">
+                                                        Meeting: {a.meeting_id.slice(0, 8)}…
+                                                      </p>
+                                                      <p className="text-xs text-muted-foreground">
+                                                        {a.checked_in_at ? new Date(a.checked_in_at).toLocaleString() : '—'}
+                                                      </p>
+                                                    </div>
+                                                    <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+                                                      a.status === 'present' ? 'bg-success/15 text-success' :
+                                                      a.status === 'absent' ? 'bg-destructive/15 text-destructive' :
+                                                      'bg-gold-400/20 text-gold-700'
+                                                    }`}>
+                                                      {a.status}
+                                                    </span>
+                                                  </div>
+                                                ))
+                                              )}
+                                            </CardContent>
+                                          </Card>
+                                        )}
+
+                                        {/* === PROFILE TAB === */}
+                                        {tab === 'profile' && (
+                                          <Card>
+                                            <CardHeader>
+                                              <CardTitle className="flex items-center gap-2">
+                                                <User className="w-5 h-5 text-primary" /> Personal Profile
+                                              </CardTitle>
+                                            </CardHeader>
+                                            <CardContent>
+                                              {!editing ? (
+                                                <div className="space-y-4">
+                                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                    <div>
+                                                      <p className="text-xs font-semibold text-muted-foreground">Display name</p>
+                                                      <p className="text-sm">{profile.display_name}</p>
+                                                    </div>
+                                                    <div>
+                                                      <p className="text-xs font-semibold text-muted-foreground">Email</p>
+                                                      <p className="text-sm">{user.email}</p>
+                                                    </div>
+                                                    <div>
+                                                      <p className="text-xs font-semibold text-muted-foreground">Phone</p>
+                                                      <p className="text-sm">{profile.phone || '—'}</p>
+                                                    </div>
+                                                    <div>
+                                                      <p className="text-xs font-semibold text-muted-foreground">Address</p>
+                                                      <p className="text-sm">{profile.address || '—'}</p>
+                                                    </div>
+                                                    <div>
+                                                      <p className="text-xs font-semibold text-muted-foreground">Member code</p>
+                                                      <p className="text-sm font-mono">{profile.member_code || '—'}</p>
+                                                    </div>
+                                                    <div>
+                                                      <p className="text-xs font-semibold text-muted-foreground">National ID</p>
+                                                      <p className="text-sm font-mono">{profile.national_id || '—'}</p>
+                                                    </div>
+                                                    <div>
+                                                      <p className="text-xs font-semibold text-muted-foreground">Hierarchy role</p>
+                                                      <p className="text-sm">{profile.hierarchy_role || 'Member'}</p>
+                                                    </div>
+                                                    <div>
+                                                      <p className="text-xs font-semibold text-muted-foreground">System role</p>
+                                                      <p className="text-sm capitalize">{profile.role}</p>
+                                                    </div>
+                                                  </div>
+                                                  {profile.bio && (
+                                                    <div>
+                                                      <p className="text-xs font-semibold text-muted-foreground">Bio</p>
+                                                      <p className="text-sm whitespace-pre-line">{profile.bio}</p>
+                                                    </div>
+                                                  )}
+                                                  <Button onClick={() => setEditing(true)} leftIcon={<Edit3 className="w-4 h-4" />}>
+                                                    Edit profile
+                                                  </Button>
+                                                </div>
+                                              ) : (
+                                                <div className="space-y-3">
+                                                  <Input label="Display name" value={form.display_name}
+                                                    onChange={(e) => setForm((p) => ({ ...p, display_name: e.target.value }))} />
+                                                  <Input label="Phone" value={form.phone ?? ''}
+                                                    onChange={(e) => setForm((p) => ({ ...p, phone: e.target.value }))} />
+                                                  <Input label="Address" value={form.address ?? ''}
+                                                    onChange={(e) => setForm((p) => ({ ...p, address: e.target.value }))} />
+                                                  <Textarea label="Bio" rows={4} value={form.bio ?? ''}
+                                                    onChange={(e) => setForm((p) => ({ ...p, bio: e.target.value }))} />
+                                                  <div className="flex gap-2">
+                                                    <Button onClick={handleSave} isLoading={saving} leftIcon={<Save className="w-4 h-4" />}>
+                                                      Save
+                                                    </Button>
+                                                    <Button variant="outline" onClick={() => setEditing(false)}>Cancel</Button>
+                                                  </div>
+                                                </div>
+                                              )}
+                                            </CardContent>
+                                          </Card>
+                                        )}
+
+                                        {/* RSVP Modal */}
+                                        {rsvpModal && (
+                                          <Modal title={`RSVP · ${rsvpModal.title}`} onClose={() => setRsvpModal(null)}>
+                                            <div className="space-y-3">
+                                              <p className="text-sm text-muted-foreground">
+                                                {new Date(rsvpModal.scheduled_at).toLocaleString()} • {rsvpModal.location}
+                                              </p>
+                                              <div>
+                                                <label className="block text-sm font-medium mb-1.5">Your response</label>
+                                                <select
+                                                  value={rsvpResponse}
+                                                  onChange={(e) => setRsvpResponse(e.target.value as RsvpResponse)}
+                                                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                                                >
+                                                  <option value="attending">Attending</option>
+                                                  <option value="not_attending">Not attending</option>
+                                                  <option value="maybe">Maybe</option>
+                                                </select>
+                                              </div>
+                                              <Textarea
+                                                label="Reason (optional)"
+                                                rows={2}
+                                                value={rsvpReason}
+                                                onChange={(e) => setRsvpReason(e.target.value)}
+                                                placeholder="e.g. Travel, illness, prior commitment…"
+                                              />
+                                              <div className="flex gap-2">
+                                                <Button
+                                                  onClick={async () => {
+                                                    setSubmittingRsvp(true);
+                                                    try {
+                                                      await submitMeetingRsvp(rsvpModal.id, rsvpResponse, rsvpReason || undefined);
+                                                      // Refresh my RSVPs
+                                                      const list = await getMeetingRsvps(rsvpModal.id);
+                                                      const mine = list.find((r) => r.member_id === profile.id);
+                                                      if (mine) setMyRsvps({ ...myRsvps, [rsvpModal.id]: mine });
+                                                      toast.success('RSVP recorded');
+                                                      setRsvpModal(null);
+                                                    } catch (err: any) {
+                                                      toast.error(err?.message || 'Failed');
+                                                    } finally {
+                                                      setSubmittingRsvp(false);
+                                                    }
+                                                  }}
+                                                  isLoading={submittingRsvp}
+                                                  leftIcon={<Send className="w-4 h-4" />}
+                                                >
+                                                  Submit
+                                                </Button>
+                                                <Button variant="outline" onClick={() => setRsvpModal(null)}>Cancel</Button>
+                                              </div>
+                                            </div>
+                                          </Modal>
+                                        )}
+
+                                      </div>
+                                    </div>
+                                  </motion.div>
+                                </div>
+                              </section>
+                            );
+                          };
