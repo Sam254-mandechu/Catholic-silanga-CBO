@@ -1,6 +1,9 @@
-// Domain types shared across the app. These mirror the SQL schema in supabase/schema.sql.
+// Domain types shared across the app. These mirror the SQL schema in supabase/schema.sql
+// (plus the additive v2/v3/v4/v5 migration files).
 
-export type Role = 'admin' | 'member' | 'moderator';
+// v5: extended with 'secretary' and 'treasurer' for role-gated workflows
+// (meetings, minutes, polls, expenses, financial reports).
+export type Role = 'admin' | 'member' | 'moderator' | 'secretary' | 'treasurer';
 export type AccountStatus = 'active' | 'pending' | 'suspended';
 export type ProjectStatus = 'planning' | 'ongoing' | 'completed';
 export type DonationStatus = 'pending' | 'completed' | 'failed';
@@ -207,4 +210,196 @@ export interface SignUpInput {
   member_code: string;        // The CBO-issued code (e.g. "CBO-2025-014")
   position_requested: HierarchyRole;  // The position the registrant says they hold
   phone?: string;
+}
+
+// =====================================================================
+// v5 — Meetings
+// =====================================================================
+
+export type MeetingType = 'general' | 'committee' | 'emergency' | 'agm';
+export type MeetingStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
+export type RsvpResponse = 'attending' | 'not_attending' | 'maybe';
+export type AttendanceStatus = 'present' | 'absent' | 'excused';
+
+export interface Meeting {
+  id: string;
+  title: string;
+  description: string | null;
+  scheduled_at: string;
+  location: string | null;
+  meeting_type: MeetingType;
+  status: MeetingStatus;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MeetingRsvp {
+  id: string;
+  meeting_id: string;
+  member_id: string;
+  response: RsvpResponse;
+  reason: string | null;
+  submitted_at: string;
+}
+
+export interface MeetingAttendance {
+  id: string;
+  meeting_id: string;
+  member_id: string;
+  status: AttendanceStatus;
+  checked_in_at: string;
+  marked_by: string | null;
+}
+
+export interface MeetingMinutes {
+  id: string;
+  meeting_id: string;
+  agenda: string | null;
+  discussions: string | null;
+  decisions: string | null;
+  /** jsonb — opaque to the client. Use a structured helper when reading. */
+  action_items: unknown;
+  published_by: string | null;
+  published_at: string;
+}
+
+// =====================================================================
+// v5 — Polls
+// =====================================================================
+
+export type PollType = 'single_choice' | 'multiple_choice' | 'yes_no';
+export type PollStatus = 'open' | 'closed';
+
+export interface Poll {
+  id: string;
+  title: string;
+  description: string | null;
+  type: PollType;
+  status: PollStatus;
+  closes_at: string;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface PollOption {
+  id: string;
+  poll_id: string;
+  label: string;
+  display_order: number;
+}
+
+export interface PollVote {
+  id: string;
+  poll_id: string;
+  option_id: string;
+  voter_id: string;
+  voted_at: string;
+}
+
+// =====================================================================
+// v5 — Expenses / Financial Reports
+// =====================================================================
+
+export type ExpenseCategory =
+  | 'operations'
+  | 'events'
+  | 'charity'
+  | 'utilities'
+  | 'salaries'
+  | 'supplies'
+  | 'maintenance'
+  | 'other';
+
+export type FinancialReportStatus = 'draft' | 'submitted' | 'approved';
+
+export interface Expense {
+  id: string;
+  title: string;
+  amount: number;
+  currency: string;
+  category: ExpenseCategory;
+  description: string | null;
+  receipt_url: string | null;
+  vendor: string | null;
+  expense_date: string;
+  recorded_by: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+  created_at: string;
+}
+
+export interface FinancialReport {
+  id: string;
+  period_start: string;
+  period_end: string;
+  opening_balance: number;
+  total_income: number;
+  total_expenses: number;
+  closing_balance: number;
+  notes: string | null;
+  status: FinancialReportStatus;
+  prepared_by: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+  created_at: string;
+}
+
+// =====================================================================
+// v5 — RPC payload shapes (client → service)
+// =====================================================================
+
+/** Payload for `record_expense(jsonb)`. */
+export interface ExpenseInput {
+  title: string;
+  amount: number;
+  currency?: string;
+  category: ExpenseCategory;
+  description?: string | null;
+  receipt_url?: string | null;
+  vendor?: string | null;
+  /** ISO date string, e.g. "2026-08-06". */
+  expense_date: string;
+}
+
+/** Payload for `submit_financial_report(date, date, text)`. */
+export interface FinancialReportInput {
+  period_start: string;
+  period_end: string;
+  notes?: string | null;
+}
+
+/** Payload for `submit_meeting_rsvp(uuid, text, text)`. */
+export interface MeetingRsvpInput {
+  meeting_id: string;
+  response: RsvpResponse;
+  reason?: string | null;
+}
+
+/** Payload for `mark_meeting_attendance(uuid, uuid, text)`. */
+export interface MeetingAttendanceInput {
+  meeting_id: string;
+  member_id: string;
+  status: AttendanceStatus;
+}
+
+/** Payload for `write_meeting_minutes(...)`. */
+export interface MeetingMinutesInput {
+  meeting_id: string;
+  agenda?: string | null;
+  discussions?: string | null;
+  decisions?: string | null;
+  action_items?: unknown;
+}
+
+/** Payload for `cast_poll_vote(uuid, uuid)`. */
+export interface PollVoteInput {
+  poll_id: string;
+  option_id: string;
+}
+
+/** Payload for `admin_set_system_role(uuid, text)`. */
+export interface SystemRoleInput {
+  target_user_id: string;
+  new_role: Role;
 }
