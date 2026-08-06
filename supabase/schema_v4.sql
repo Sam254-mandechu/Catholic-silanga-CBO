@@ -4,6 +4,22 @@
 -- + storage bucket for profile photos & gallery
 --
 -- Run after schema_v3.sql.
+-- Safe to re-run.
+--
+-- ⚠️  CONFLICT WARNING — SITE_CONTENT TABLE SHAPE ⚠️
+-- schema_v6.sql also creates a `site_content` table, but with a
+-- different shape (key/value instead of singleton id=1). Whichever
+-- runs FIRST wins because both use CREATE TABLE IF NOT EXISTS.
+--
+-- The frontend uses the v6 (key/value) shape via getSiteContentValue().
+-- If you ran this v4 before v6, the table is in the v4 singleton
+-- shape and v6 silently no-op'd. To fix:
+--     drop table if exists public.site_content cascade;
+--     -- then re-run schema_v6.sql
+-- (or vice versa, but the frontend expects the v6 shape).
+--
+-- This file's INSERT at the bottom is wrapped in a guard so it
+-- only runs when the singleton column "id" exists.
 -- =====================================================================
 
 -- ----- Site content (singleton row keyed by id=1) -----
@@ -43,8 +59,20 @@ create policy "Site content admin-write"
   on public.site_content for all to authenticated
   using (public.is_admin()) with check (public.is_admin());
 
--- Seed row 1
-insert into public.site_content (id) values (1) on conflict (id) do nothing;
+-- Seed row 1 (only if this v4 shape won the create-table race; v6 uses key/value).
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'site_content'
+      and column_name = 'id'
+      and data_type = 'integer'
+  ) then
+    insert into public.site_content (id) values (1) on conflict (id) do nothing;
+  end if;
+end
+$$;
 
 -- ----- Storage buckets -----
 -- Profile photos (private — only owner + admin can read; owner can write)
@@ -112,3 +140,8 @@ create policy "Gallery admin write"
 --    "Site Content" tab. No manual file uploads needed.
 -- 4. To test: register a member, go to /member-dashboard, click the
 --    avatar to upload a new photo. It'll appear on the public Members page.
+-- 5. If you ran this file BEFORE schema_v6.sql and your site_content
+--    table has columns like (id, welcome_title, mission_text, ...),
+--    the frontend will not see them. Fix with:
+--       drop table if exists public.site_content cascade;
+--       -- then re-run schema_v6.sql

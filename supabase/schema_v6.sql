@@ -5,7 +5,68 @@
 --
 -- Run this AFTER schema_v3.sql (you should already have all v5 tables).
 -- Safe to re-run (uses if not exists / drop policy if exists patterns).
+--
+-- ⚠️  CONFLICT WARNING — SITE_CONTENT TABLE SHAPE ⚠️
+-- schema_v4.sql also creates a `site_content` table, but with a
+-- different shape (singleton id=1 with named columns). Whichever
+-- runs FIRST wins. The frontend uses THIS v6 (key/value) shape.
+--
+-- If you already ran v4 and the table is in the v4 shape, v6 will
+-- no-op. This file now auto-detects that situation and migrates
+-- any v4 data into v6 key/value rows before exiting.
 -- =====================================================================
+
+-- ----- Pre-flight: migrate v4 singleton → v6 key/value if needed -----
+do $$
+declare
+  has_v4_id boolean;
+  r record;
+begin
+  -- Detect v4 shape: integer column named "id"
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'site_content'
+      and column_name = 'id'
+      and data_type = 'integer'
+  ) into has_v4_id;
+
+  if has_v4_id then
+    -- Save v4 data into temp key/value pairs before we drop
+    for r in
+      select * from public.site_content
+    loop
+      -- Use CREATE TEMP TABLE so we don't depend on any pre-existing schema
+      create temp table if not exists _v4_site_content_migration (
+        key text primary key,
+        value text
+      ) on commit drop;
+      insert into _v4_site_content_migration(key, value) values
+        ('welcome_title',       r.welcome_title),
+        ('welcome_subtitle',    r.welcome_subtitle),
+        ('welcome_message',     r.welcome_message),
+        ('welcome_image_url',   r.welcome_image_url),
+        ('mission',             r.mission_text),
+        ('vision',              r.vision_text),
+        ('values',              r.values_text),
+        ('terms_of_service',    r.terms_of_service),
+        ('privacy_policy',      r.privacy_policy),
+        ('contact_address',     r.contact_address),
+        ('contact_phone',       r.contact_phone),
+        ('contact_email',       r.contact_email),
+        ('contact_hours',       r.contact_hours),
+        ('social_facebook',     r.social_facebook),
+        ('social_twitter',      r.social_twitter),
+        ('social_instagram',    r.social_instagram),
+        ('social_youtube',      r.social_youtube)
+      on conflict (key) do nothing;
+    end loop;
+
+    -- Drop the v4 singleton
+    drop table public.site_content cascade;
+  end if;
+end
+$$;
 
 -- ----- site_content: editable copy + image refs for public pages -----
 create table if not exists public.site_content (
@@ -14,6 +75,11 @@ create table if not exists public.site_content (
   updated_by uuid references auth.users (id) on delete set null,
   updated_at timestamptz not null default now()
 );
+
+-- Restore any data we migrated above
+insert into public.site_content (key, value)
+select key, value from _v4_site_content_migration
+on conflict (key) do nothing;
 
 alter table public.site_content enable row level security;
 
