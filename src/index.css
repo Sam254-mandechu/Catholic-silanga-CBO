@@ -1,75 +1,77 @@
 @import "tailwindcss";
 
 @theme {
-  /* ===== CREAM (light) + RED palette ===== */
-  /* cream tones - off-white background & warm cards */
-  --color-cream-50:  #fdfaf3;
-  --color-cream-100: #f7efe0;
-  --color-cream-200: #efe2c8;
-  --color-cream-300: #e3d0a8;
-  --color-cream-400: #d4b985;
-  --color-cream-500: #c79e60;
-  --color-cream-600: #a87f43;
-  --color-cream-700: #856030;
-  --color-cream-800: #5e4220;
-  --color-cream-900: #3a2812;
+  /* ===== NEW PALETTE: Purple (#804A8A, #3A0353) + Warm Gold (#F8D299, #F59E51) ===== */
 
-  /* red tones - primary brand (deep, dignified red) */
-  --color-red-50:  #fdf2f2;
-  --color-red-100: #fce4e4;
-  --color-red-200: #f9c5c5;
-  --color-red-300: #f29393;
-  --color-red-400: #e85d5d;
-  --color-red-500: #c8312f;
-  --color-red-600: #a82524;
-  --color-red-700: #841c1b;
-  --color-red-800: #5e1413;
-  --color-red-900: #3a0c0c;
+  /* purple tones - primary brand */
+  --color-purple-50:  #faf5fc;
+  --color-purple-100: #f3e8f7;
+  --color-purple-200: #e7d2ef;
+  --color-purple-300: #d3abe0;
+  --color-purple-400: #b27dca;
+  --color-purple-500: #804a8a;
+  --color-purple-600: #6a3d72;
+  --color-purple-700: #523059;
+  --color-purple-800: #3a0353;
+  --color-purple-900: #260238;
+  --color-purple-950: #180125;
 
-  /* gray tones for muted text & borders */
-  --color-muted-50:  #f9f7f3;
-  --color-muted-100: #ede9e0;
-  --color-muted-200: #d8d2c4;
-  --color-muted-300: #b8b0a0;
-  --color-muted-400: #8a8377;
-  --color-muted-500: #5d584e;
-  --color-muted-600: #3e3a32;
-  --color-muted-700: #2a2620;
-  --color-muted-800: #1a1814;
-  --color-muted-900: #0f0e0b;
+  /* warm gold/amber tones - secondary brand (replaces cream) */
+  --color-amber-50:  #fef9ee;
+  --color-amber-100: #fef0d4;
+  --color-amber-200: #fde2a8;
+  --color-amber-300: #fcd078;
+  --color-amber-400: #f8d299;
+  --color-amber-500: #f59e51;
+  --color-amber-600: #e07b27;
+  --color-amber-700: #b85d18;
+  --color-amber-800: #8a4514;
+  --color-amber-900: #5e2f0e;
 
-  /* ===== Semantic tokens - LIGHT MODE (cream + red) ===== */
-  --color-background: var(--color-cream-50);
-  --color-foreground: var(--color-cream-900);
+  /* muted neutrals - warm grey with slight purple tint */
+  --color-muted-50:  #f9f7fa;
+  --color-muted-100: #ede9f0;
+  --color-muted-200: #d8d2de;
+  --color-muted-300: #b8b0c0;
+  --color-muted-400: #8a8397;
+  --color-muted-500: #5d5868;
+  --color-muted-600: #3e3a48;
+  --color-muted-700: #2a2638;
+  --color-muted-800: #1a1825;
+  --color-muted-900: #0f0e16;
+
+  /* ===== Semantic tokens - LIGHT MODE (purple + amber) ===== */
+  --color-background: var(--color-amber-50);
+  --color-foreground: var(--color-purple-900);
   --color-card: #ffffff;
-  --color-card-foreground: var(--color-cream-900);
+  --color-card-foreground: var(--color-purple-900);
   --color-popover: #ffffff;
-  --color-popover-foreground: var(--color-cream-900);
-  --color-primary: var(--color-red-700);
+  --color-popover-foreground: var(--color-purple-900);
+  --color-primary: var(--color-purple-800);
   --color-primary-foreground: #ffffff;
-  --color-secondary: var(--color-cream-100);
-  --color-secondary-foreground: var(--color-cream-900);
-  --color-accent: var(--color-red-600);
-  --color-accent-foreground: #ffffff;
-  --color-muted: var(--color-cream-100);
-  --color-muted-foreground: var(--color-cream-700);
-  --color-destructive: var(--color-red-600);
+  --color-secondary: var(--color-amber-100);
+  --color-secondary-foreground: var(--color-purple-900);
+  --color-accent: var(--color-amber-500);
+  --color-accent-foreground: var(--color-purple-900);
+  --color-muted: var(--color-amber-100);
+  --color-muted-foreground: var(--color-purple-700);
+  --color-destructive: var(--color-amber-600);
   --color-destructive-foreground: #ffffff;
   --color-success: #2f7d32;
   --color-success-foreground: #ffffff;
-  --color-border: var(--color-cream-200);
-  --color-input: var(--color-cream-200);
-  --color-ring: var(--color-red-700);
-  --color-gold-50: var(--color-cream-50);
-  --color-gold-100: var(--color-cream-100);
-  --color-gold-200: var(--color-cream-200);
-  --color-gold-300: var(--color-cream-300);
-  --color-gold-400: var(--color-cream-400);
-  --color-gold-500: var(--color-cream-500);
-  --color-gold-600: var(--color-cream-600);
-  --color-gold-700: var(--color-cream-700);
-  --color-gold-800: var(--color-cream-800);
-  --color-gold-900: var(--color-cream-900);
+  --color-border: var(--color-purple-200);
+  --color-input: var(--color-purple-200);
+  --color-ring: var(--color-purple-500);
+  --color-gold-50: var(--color-amber-50);
+  --color-gold-100: var(--color-amber-100);
+  --color-gold-200: var(--color-amber-200);
+  --color-gold-300: var(--color-amber-300);
+  --color-gold-400: var(--color-amber-400);
+  --color-gold-500: var(--color-amber-500);
+  --color-gold-600: var(--color-amber-600);
+  --color-gold-700: var(--color-amber-700);
+  --color-gold-800: var(--color-amber-800);
+  --color-gold-900: var(--color-amber-900);
 
   --font-sans: Inter, system-ui, sans-serif;
   --font-heading: "Playfair Display", serif;
@@ -108,29 +110,29 @@
   50% { transform: translateY(-10px); }
 }
 
-/* ===== DARK MODE (whole site) ===== */
+/* ===== DARK MODE (whole site) — inverted palette ===== */
 .dark {
-  --color-background: var(--color-cream-900);
-  --color-foreground: var(--color-cream-50);
-  --color-card: #2a2620;
-  --color-card-foreground: var(--color-cream-50);
-  --color-popover: #2a2620;
-  --color-popover-foreground: var(--color-cream-50);
-  --color-primary: var(--color-red-400);
-  --color-primary-foreground: var(--color-cream-50);
-  --color-secondary: #2a2620;
-  --color-secondary-foreground: var(--color-cream-100);
-  --color-accent: var(--color-red-500);
-  --color-accent-foreground: var(--color-cream-50);
-  --color-muted: #2a2620;
-  --color-muted-foreground: var(--color-cream-300);
-  --color-destructive: var(--color-red-500);
+  --color-background: var(--color-purple-900);
+  --color-foreground: var(--color-amber-50);
+  --color-card: #1a1825;
+  --color-card-foreground: var(--color-amber-50);
+  --color-popover: #1a1825;
+  --color-popover-foreground: var(--color-amber-50);
+  --color-primary: var(--color-amber-400);
+  --color-primary-foreground: var(--color-purple-900);
+  --color-secondary: #2a2638;
+  --color-secondary-foreground: var(--color-amber-100);
+  --color-accent: var(--color-amber-500);
+  --color-accent-foreground: var(--color-purple-900);
+  --color-muted: #2a2638;
+  --color-muted-foreground: var(--color-purple-200);
+  --color-destructive: var(--color-amber-600);
   --color-destructive-foreground: #ffffff;
   --color-success: #4caf50;
   --color-success-foreground: #ffffff;
-  --color-border: var(--color-cream-700);
-  --color-input: var(--color-cream-700);
-  --color-ring: var(--color-red-400);
+  --color-border: var(--color-purple-700);
+  --color-input: var(--color-purple-700);
+  --color-ring: var(--color-amber-400);
 }
 
 * {
