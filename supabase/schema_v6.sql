@@ -17,12 +17,19 @@
 -- =====================================================================
 
 -- ----- Pre-flight: migrate v4 singleton → v6 key/value if needed -----
+-- Uses a permanent staging table (not TEMP) because temp tables created
+-- inside a DO block are dropped when the block ends — we need the data
+-- to survive into the next SELECT below.
+create table if not exists public._v4_site_content_migration (
+  key text primary key,
+  value text
+);
+
 do $$
 declare
   has_v4_id boolean;
   r record;
 begin
-  -- Detect v4 shape: integer column named "id"
   select exists (
     select 1 from information_schema.columns
     where table_schema = 'public'
@@ -32,16 +39,8 @@ begin
   ) into has_v4_id;
 
   if has_v4_id then
-    -- Save v4 data into temp key/value pairs before we drop
-    for r in
-      select * from public.site_content
-    loop
-      -- Use CREATE TEMP TABLE so we don't depend on any pre-existing schema
-      create temp table if not exists _v4_site_content_migration (
-        key text primary key,
-        value text
-      ) on commit drop;
-      insert into _v4_site_content_migration(key, value) values
+    for r in select * from public.site_content loop
+      insert into public._v4_site_content_migration(key, value) values
         ('welcome_title',       r.welcome_title),
         ('welcome_subtitle',    r.welcome_subtitle),
         ('welcome_message',     r.welcome_message),
@@ -62,7 +61,6 @@ begin
       on conflict (key) do nothing;
     end loop;
 
-    -- Drop the v4 singleton
     drop table public.site_content cascade;
   end if;
 end
@@ -78,8 +76,11 @@ create table if not exists public.site_content (
 
 -- Restore any data we migrated above
 insert into public.site_content (key, value)
-select key, value from _v4_site_content_migration
+select key, value from public._v4_site_content_migration
 on conflict (key) do nothing;
+
+-- Clean up the staging table
+drop table if exists public._v4_site_content_migration;
 
 alter table public.site_content enable row level security;
 
