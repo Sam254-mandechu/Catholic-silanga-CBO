@@ -11,6 +11,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Ca
 import { Button } from '../../components/ui/Button';
 import { Input, Textarea } from '../../components/ui/Input';
 import { Modal } from '../../components/common/Modal';
+import { ProfilePhotoUploader } from '../../components/dashboard/ProfilePhotoUploader';
+import { NotificationsTab } from '../../components/dashboard/NotificationsTab';
 import { useAuth } from '../../contexts/AuthContext';
 import { toast } from '../../utils/toast';
 import {
@@ -26,7 +28,7 @@ import type {
   Poll, PollOption, RsvpResponse,
 } from '../../types/database';
 
-type Tab = 'overview' | 'tasks' | 'contributions' | 'meetings' | 'polls' | 'attendance' | 'profile';
+type Tab = 'overview' | 'tasks' | 'contributions' | 'meetings' | 'polls' | 'attendance' | 'profile' | 'notifications';
 
 export const MemberDashboard: React.FC = () => {
   const navigate = useNavigate();
@@ -290,6 +292,7 @@ export const MemberDashboard: React.FC = () => {
                       {tabBtn('polls', `Polls (${activePolls.length})`, Vote)}
                       {tabBtn('attendance', `Attendance (${myAttendance.length})`, CheckCheck)}
                       {tabBtn('profile', 'Profile', User)}
+                      {tabBtn('notifications', 'Notifications', Bell)}
                     </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -852,18 +855,29 @@ export const MemberDashboard: React.FC = () => {
                                           </Card>
                                         )}
 
+                                        {/* === NOTIFICATIONS TAB === */}
+                                        {tab === 'notifications' && (
+                                          <NotificationsTab />
+                                        )}
+
                                         {/* === PROFILE TAB === */}
-                                        {tab === 'profile' && (
-                                          <Card>
-                                            <CardHeader>
-                                              <CardTitle className="flex items-center gap-2">
-                                                <User className="w-5 h-5 text-primary" /> Personal Profile
-                                              </CardTitle>
-                                            </CardHeader>
-                                            <CardContent>
-                                              {!editing ? (
-                                                <div className="space-y-4">
-                                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                                                {tab === 'profile' && (
+                                                                                  <Card>
+                                                                                    <CardHeader>
+                                                                                      <CardTitle className="flex items-center gap-2">
+                                                                                        <User className="w-5 h-5 text-primary" /> Personal Profile
+                                                                                      </CardTitle>
+                                                                                    </CardHeader>
+                                                                                    <CardContent>
+                                                                                      {!editing ? (
+                                                                                        <div className="space-y-4">
+                                                                                          <ProfilePhotoUploader
+                                                                                            userId={profile.id}
+                                                                                            photoUrl={profile.photo_url ?? null}
+                                                                                            displayName={profile.display_name}
+                                                                                            onUploaded={() => { loadMemberData(); }}
+                                                                                          />
+                                                                                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                                     <div>
                                                       <p className="text-xs font-semibold text-muted-foreground">Display name</p>
                                                       <p className="text-sm">{profile.display_name}</p>

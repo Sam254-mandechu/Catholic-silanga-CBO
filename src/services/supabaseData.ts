@@ -24,7 +24,12 @@ import type {
   PollType,
   Expense,
   FinancialReport,
-} from '../types/database';
+  // v6 — site content
+      SiteContentKey,
+    // v7 — notifications
+    NotificationRow,
+    NotificationKind,
+    } from '../types/database';
 
 // =====================================================================
 // PROJECTS
@@ -205,18 +210,47 @@ export async function adminMarkContactRead(id: string, read: boolean): Promise<v
 // =====================================================================
 // DONATIONS / CONTRIBUTIONS
 // =====================================================================
+
+/**
+ * Record a contribution from the current user. Pulls the auth.uid() and
+ * attaches it as `donor_id` so the per-member panel can query by it.
+ */
 export async function recordDonation(
   input: Omit<Donation, 'id' | 'created_at' | 'status' | 'donor_id'>,
 ): Promise<Donation> {
+  const { data: { user } } = await supabase.auth.getUser();
   const { data, error } = await supabase
     .from('donations')
-    .insert({ ...input, status: 'pending' })
+    .insert({
+      ...input,
+      status: 'pending',
+      donor_id: user?.id ?? null,
+    })
     .select('*')
     .single();
   if (error) throw error;
+
+  // Ping the donor (themselves) — "submission received, awaiting verification"
+  if (user?.id) {
+    try {
+      await createNotification({
+        recipient_id: user.id,
+        actor_id: user.id,
+        kind: 'contribution_submitted',
+        title: 'Contribution submitted',
+        message: `Your contribution of ${input.amount} ${input.currency} for "${input.purpose}" is awaiting verification.`,
+        link: '/member-dashboard?tab=contributions',
+        payload: { donation_id: data.id, amount: input.amount, currency: input.currency },
+      });
+    } catch (err) {
+      console.warn('Notification fan-out failed (non-fatal):', err);
+    }
+  }
+
   return data as Donation;
 }
 
+/** Verifier (admin OR treasurer) marks a contribution as verified or rejected. */
 export async function adminVerifyDonation(
   id: string,
   opts: { status: 'completed' | 'failed'; admin_note?: string } = { status: 'completed' },
@@ -233,9 +267,33 @@ export async function adminVerifyDonation(
   return data as Donation;
 }
 
+/** All recent donations — for the admin/treasurer pending queue. */
 export async function getRecentDonations(limit = 50): Promise<Donation[]> {
   const { data, error } = await supabase
     .from('donations').select('*').order('created_at', { ascending: false }).limit(limit);
+  if (error) throw error;
+  return (data ?? []) as Donation[];
+}
+
+/**
+ * Per-member contributions panel — calls the secure RPC so we always get
+ * exactly the donor's own rows (RLS-safe even if the policy isn't set up).
+ */
+export async function listMyDonations(limit = 100): Promise<Donation[]> {
+  try {
+    const { data, error } = await supabase.rpc('list_my_donations', { p_limit: limit });
+    if (!error && data) return data as Donation[];
+    if (error && !/does not exist/i.test(error.message)) throw error;
+  } catch (err: any) {
+    if (!/does not exist/i.test(err?.message ?? '')) throw err;
+  }
+  // Fallback: direct query (requires RLS policy "donor_id = auth.uid()")
+  const { data, error } = await supabase
+    .from('donations')
+    .select('*')
+    .eq('donor_id', (await supabase.auth.getUser()).data.user?.id ?? '')
+    .order('created_at', { ascending: false })
+    .limit(limit);
   if (error) throw error;
   return (data ?? []) as Donation[];
 }
@@ -253,8 +311,17 @@ export async function getVerifiedContributions(limit = 100): Promise<Donation[]>
 }
 
 export async function getMyDonations(memberId: string): Promise<Donation[]> {
+  // Prefer the auth-aware RPC so we don't depend on RLS for this read.
+  try {
+    const { data, error } = await supabase.rpc('list_my_donations', { p_limit: 200 });
+    if (!error && data) return (data ?? []) as Donation[];
+    if (error && !/does not exist/i.test(error.message)) throw error;
+  } catch (err: any) {
+    if (!/does not exist/i.test(err?.message ?? '')) throw err;
+  }
+  // Fallback: query by donor_id (requires RLS policy or admin context)
   const { data, error } = await supabase
-    .from('donations').select('*').eq('member_id', memberId).order('created_at', { ascending: false });
+    .from('donations').select('*').eq('donor_id', memberId).order('created_at', { ascending: false });
   if (error) throw error;
   return (data ?? []) as Donation[];
 }
@@ -276,6 +343,20 @@ export async function addAnnouncement(
     .select('*')
     .single();
   if (error) throw error;
+
+  // Broadcast to all active members (best-effort, non-fatal)
+  try {
+    await broadcastNotification({
+      kind: 'announcement_posted',
+      title: input.title,
+      message: input.content?.slice(0, 200) ?? '',
+      link: '/member-dashboard?tab=overview',
+      payload: { announcement_id: data.id, priority: input.priority },
+    });
+  } catch (err) {
+    console.warn('Announcement broadcast failed (non-fatal):', err);
+  }
+
   return data as Announcement;
 }
 export async function deleteAnnouncement(id: string): Promise<void> {
@@ -305,6 +386,24 @@ export async function addTask(input: Omit<Task, 'id' | 'created_at' | 'updated_a
     .select('*')
     .single();
   if (error) throw error;
+
+  // Notify the assignee (if known)
+  try {
+    if (input.assignee_id) {
+      await createNotification({
+        recipient_id: input.assignee_id,
+        actor_id: user?.id ?? null,
+        kind: 'task_assigned',
+        title: 'New task assigned',
+        message: `You were assigned: "${input.title}"`,
+        link: '/member-dashboard?tab=tasks',
+        payload: { task_id: data.id, priority: input.priority },
+      });
+    }
+  } catch (err) {
+    console.warn('Task notification fan-out failed:', err);
+  }
+
   return data as Task;
 }
 export async function updateTaskStatus(id: string, status: TaskStatus): Promise<Task> {
@@ -931,4 +1030,257 @@ export async function getFinancialSummary(
     total_expenses,
     net: total_income - total_expenses,
   };
+}
+
+// =====================================================================
+// v6 — SITE CONTENT (welcome message, mission, vision, contact, legal)
+// =====================================================================
+
+/**
+ * Fetch a single site-content value by key.
+ * Returns null if the key doesn't exist.
+ */
+export async function getSiteContentValue(key: SiteContentKey): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('site_content')
+    .select('value')
+    .eq('key', key)
+    .maybeSingle();
+  if (error) {
+    console.warn(`getSiteContentValue(${key}) failed`, error);
+    return null;
+  }
+  return (data?.value as string | undefined) ?? null;
+}
+
+/**
+ * Fetch many site-content keys at once.
+ * Returns a Record so callers can destructure just what they need.
+ */
+export async function getSiteContentMap(keys: readonly SiteContentKey[]): Promise<Record<string, string>> {
+  const { data, error } = await supabase
+    .from('site_content')
+    .select('key, value')
+    .in('key', keys as string[]);
+  if (error) {
+    console.warn('getSiteContentMap failed', error);
+    return {};
+  }
+  const map: Record<string, string> = {};
+  for (const row of (data ?? []) as Array<{ key: string; value: string }>) {
+    map[row.key] = row.value;
+  }
+  return map;
+}
+
+/**
+ * Upsert one or many site-content rows.
+ * Returns the rows that were written.
+ * Requires admin role (RLS).
+ */
+export async function upsertSiteContent(entries: Partial<Record<SiteContentKey, string>>): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  const rows = Object.entries(entries)
+    .filter(([, v]) => v !== undefined)
+    .map(([key, value]) => ({
+      key,
+      value: String(value ?? ''),
+      updated_by: user?.id ?? null,
+      updated_at: new Date().toISOString(),
+    }));
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('site_content').upsert(rows, { onConflict: 'key' });
+  if (error) throw error;
+}
+
+// =====================================================================
+// v6 — PROFILE PHOTO UPLOAD
+// =====================================================================
+
+/**
+ * Upload a profile photo for the given user.
+ *
+ * Storage path: `${userId}/avatar-${timestamp}.${ext}`
+ * Bucket: `profile-photos` (public, must exist in Supabase).
+ *
+ * Returns the public URL of the uploaded file.
+ */
+export async function uploadProfilePhoto(userId: string, file: File): Promise<string> {
+  const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const safeExt = ext.length > 0 && ext.length <= 5 ? ext : 'jpg';
+  const path = `${userId}/avatar-${Date.now()}.${safeExt}`;
+
+  const { error: uploadErr } = await supabase.storage
+    .from('profile-photos')
+    .upload(path, file, {
+      cacheControl: '3600',
+      upsert: true,
+      contentType: file.type || 'image/jpeg',
+    });
+  if (uploadErr) throw uploadErr;
+
+  const { data } = supabase.storage.from('profile-photos').getPublicUrl(path);
+  return data.publicUrl;
+}
+
+/**
+ * Delete a profile photo by its public URL.
+ * Best-effort — silently no-ops if the path can't be parsed.
+ */
+export async function deleteProfilePhoto(publicUrl: string): Promise<void> {
+  try {
+    const marker = '/storage/v1/object/public/profile-photos/';
+    const idx = publicUrl.indexOf(marker);
+    if (idx < 0) return;
+    const path = publicUrl.slice(idx + marker.length);
+    if (!path) return;
+    await supabase.storage.from('profile-photos').remove([path]);
+  } catch (err) {
+    console.warn('deleteProfilePhoto failed', err);
+  }
+}
+
+
+// =====================================================================
+// v7 — NOTIFICATIONS
+// =====================================================================
+
+/**
+ * Create a single notification for a user. Routes through the secure RPC
+ * `create_notification(uuid, text, text, text, text, jsonb, uuid)`.
+ *
+ * Falls back to a direct INSERT (which the RLS allows for authenticated
+ * users) if the RPC isn't installed yet.
+ */
+export async function createNotification(input: {
+  recipient_id: string;
+  actor_id?: string | null;
+  kind: NotificationKind;
+  title: string;
+  message: string;
+  link?: string | null;
+  payload?: Record<string, unknown> | null;
+}): Promise<NotificationRow | null> {
+  const args = {
+    p_recipient: input.recipient_id,
+    p_kind: input.kind,
+    p_title: input.title,
+    p_message: input.message,
+    p_link: input.link ?? null,
+    p_payload: input.payload ?? null,
+    p_actor: input.actor_id ?? null,
+  };
+  try {
+    const { data, error } = await supabase.rpc('create_notification', args);
+    if (!error) return (data ?? null) as NotificationRow | null;
+    if (!/does not exist/i.test(error.message)) throw error;
+  } catch (err: any) {
+    if (!/does not exist/i.test(err?.message ?? '')) throw err;
+  }
+  // Fallback: direct insert (allowed by RLS for authenticated users).
+  const { data, error } = await supabase.from('notifications').insert({
+    recipient_id: args.p_recipient,
+    actor_id: args.p_actor,
+    kind: args.p_kind,
+    title: args.p_title,
+    message: args.p_message,
+    link: args.p_link,
+    payload: args.p_payload,
+  }).select('*').single();
+  if (error) throw error;
+  return data as NotificationRow;
+}
+
+/**
+ * Send a notification to every active member (admin only).
+ * Used for site-wide announcements.
+ */
+export async function broadcastNotification(input: {
+  kind: NotificationKind;
+  title: string;
+  message: string;
+  link?: string | null;
+  payload?: Record<string, unknown> | null;
+}): Promise<number> {
+  try {
+    const { data, error } = await supabase.rpc('broadcast_notification', {
+      p_kind: input.kind,
+      p_title: input.title,
+      p_message: input.message,
+      p_link: input.link ?? null,
+      p_payload: input.payload ?? null,
+    });
+    if (!error) return (data ?? 0) as number;
+    if (!/does not exist/i.test(error.message)) throw error;
+  } catch (err: any) {
+    if (!/does not exist/i.test(err?.message ?? '')) throw err;
+  }
+  // Fallback: fan out manually (works with the "Notifications insert-by-authenticated" policy)
+  const { data: members } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('status', 'active');
+  if (!members || members.length === 0) return 0;
+  const rows = members.map((m) => ({
+    recipient_id: m.id,
+    kind: input.kind,
+    title: input.title,
+    message: input.message,
+    link: input.link ?? null,
+    payload: input.payload ?? null,
+  }));
+  const { error } = await supabase.from('notifications').insert(rows);
+  if (error) throw error;
+  return rows.length;
+}
+
+/** Fetch the current user's notifications. */
+export async function listMyNotifications(unreadOnly = false): Promise<NotificationRow[]> {
+  try {
+    const { data, error } = await supabase.rpc('list_my_notifications', { p_unread_only: unreadOnly });
+    if (!error) return (data ?? []) as NotificationRow[];
+    if (!/does not exist/i.test(error.message)) throw error;
+  } catch (err: any) {
+    if (!/does not exist/i.test(err?.message ?? '')) throw err;
+  }
+  let q = supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(200);
+  if (unreadOnly) q = q.is('read_at', null);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data ?? []) as NotificationRow[];
+}
+
+/** Lightweight unread count for the navbar badge. */
+export async function unreadNotificationCount(): Promise<number> {
+  try {
+    const { data, error } = await supabase.rpc('unread_notification_count');
+    if (!error) return (data ?? 0) as number;
+    if (!/does not exist/i.test(error.message)) throw error;
+  } catch (err: any) {
+    if (!/does not exist/i.test(err?.message ?? '')) throw err;
+  }
+  const { count, error } = await supabase
+    .from('notifications')
+    .select('*', { count: 'exact', head: true })
+    .is('read_at', null);
+  if (error) return 0;
+  return count ?? 0;
+}
+
+/** Mark specific notifications as read. */
+export async function markNotificationsRead(ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  try {
+    const { data, error } = await supabase.rpc('mark_notifications_read', { p_ids: ids });
+    if (!error) return (data ?? 0) as number;
+    if (!/does not exist/i.test(error.message)) throw error;
+  } catch (err: any) {
+    if (!/does not exist/i.test(err?.message ?? '')) throw err;
+  }
+  const { error } = await supabase
+    .from('notifications')
+    .update({ read_at: new Date().toISOString() })
+    .in('id', ids);
+  if (error) throw error;
+  return ids.length;
 }

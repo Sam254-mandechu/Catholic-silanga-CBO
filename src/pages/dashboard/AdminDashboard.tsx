@@ -24,6 +24,8 @@ import {
   addEvent, updateEvent, deleteEvent,
   addGalleryImage, deleteGalleryImage,
   uploadGalleryFile, deleteGalleryFile,
+  uploadProfilePhoto,
+  createNotification,
   // v5 — Meetings / Polls / Financial
   getMeetings, createMeeting, deleteMeeting, updateMeeting,
   getMeetingRsvps, getMeetingAttendance, getMeetingMinutes,
@@ -31,10 +33,10 @@ import {
   getPolls, getPollOptions, createPoll, closePoll, deletePoll, getPollResults,
   getExpenses, createExpense, approveExpense, deleteExpense,
   getFinancialReports, submitFinancialReport, approveFinancialReport,
-} from '../../services/supabaseData';
+  } from '../../services/supabaseData';
 import {
   adminListProfiles, adminVerifyMember, adminRejectMember,
-  adminUpdateProfileHierarchyRole, adminDeleteMember, adminSetSystemRole,
+  adminUpdateProfileHierarchyRole, adminDeleteMember, adminSetSystemRole, adminUpdateMember,
 } from '../../services/supabaseAuth';
 import type {
   Project, News, Event, GalleryImage, ContactSubmission, Profile,
@@ -44,9 +46,10 @@ import type {
   Poll, PollOption, PollType,
   Expense, ExpenseCategory,
   FinancialReport,
-} from '../../types/database';
+  } from '../../types/database';
 import { HIERARCHY_ORDER } from '../../types/database';
 import { Modal } from '../../components/common/Modal';
+import { SiteContentTab } from './SiteContentTab';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip,
   PieChart, Pie, Cell, CartesianGrid, Legend,
@@ -56,7 +59,7 @@ type Tab =
   | 'overview' | 'verification' | 'members' | 'tasks' | 'projects'
   | 'gallery' | 'news' | 'events' | 'contacts' | 'contributions'
   | 'payment-methods' | 'announcements' | 'analytics' | 'roles'
-  | 'meetings' | 'polls' | 'financial';
+  | 'meetings' | 'polls' | 'financial' | 'site-content';
 
 /** System roles an admin can assign on the profiles.role column. */
 const SYSTEM_ROLES: Role[] = ['member', 'moderator', 'secretary', 'treasurer', 'admin'];
@@ -182,8 +185,9 @@ export const AdminDashboard: React.FC = () => {
       { id: 'announcements', label: 'Announcements', icon: Megaphone },
       { id: 'contacts', label: 'Contacts', icon: Mail },
       { id: 'analytics', label: 'Analytics', icon: BarChart3 },
-      { id: 'roles', label: 'User Roles', icon: Shield },
-    ];
+            { id: 'site-content', label: 'Site Content', icon: Megaphone },
+            { id: 'roles', label: 'User Roles', icon: Shield },
+          ];
 
   const stats = [
       { label: 'Pending Verifications', value: members.filter((m) => m.status === 'pending').length, icon: Shield, color: 'text-gold-700' },
@@ -328,6 +332,7 @@ export const AdminDashboard: React.FC = () => {
               <AnnouncementsTab announcements={announcements} setAnnouncements={setAnnouncements} />
             )}
             {tab === 'analytics' && <AnalyticsTab stats={stats} projects={projects} donations={donations} />}
+                        {tab === 'site-content' && <SiteContentTab />}
                         {tab === 'roles' && <RolesTab members={members} setMembers={setMembers} />}
                         {tab === 'meetings' && (
                           <MeetingsTab
@@ -538,6 +543,95 @@ const MembersTab: React.FC<{
   members: Profile[]; setMembers: (p: any) => void;
   search: string; setSearch: (v: string) => void;
 }> = ({ members, setMembers, search, setSearch }) => {
+  const [editing, setEditing] = useState<Profile | null>(null);
+  const [editForm, setEditForm] = useState<{
+    display_name: string;
+    phone: string;
+    address: string;
+    bio: string;
+    photo_url: string | null;
+    hierarchy_role: HierarchyRole;
+  }>({
+    display_name: '', phone: '', address: '', bio: '', photo_url: null, hierarchy_role: 'Member',
+  });
+  const [saving, setSaving] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
+  const openEdit = (m: Profile) => {
+    setEditing(m);
+    setEditForm({
+      display_name: m.display_name,
+      phone: m.phone ?? '',
+      address: m.address ?? '',
+      bio: m.bio ?? '',
+      photo_url: m.photo_url ?? null,
+      hierarchy_role: (m.hierarchy_role ?? 'Member') as HierarchyRole,
+    });
+  };
+
+  const closeEdit = () => {
+    setEditing(null);
+    setEditForm({ display_name: '', phone: '', address: '', bio: '', photo_url: null, hierarchy_role: 'Member' });
+  };
+
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !editing) return;
+    setUploadingPhoto(true);
+    try {
+      const url = await uploadProfilePhoto(editing.id, file);
+      setEditForm((f) => ({ ...f, photo_url: url }));
+      toast.success('Photo uploaded');
+    } catch (err: any) {
+      toast.error(err?.message || 'Upload failed');
+    } finally {
+      setUploadingPhoto(false);
+      // Clear the input so the same file can be re-selected
+      e.target.value = '';
+    }
+  };
+
+  const handleSaveMember = async () => {
+    if (!editing) return;
+    if (!editForm.display_name.trim()) {
+      toast.error('Display name is required');
+      return;
+    }
+    setSaving(true);
+    try {
+      const updated = await adminUpdateMember(editing.id, {
+        display_name: editForm.display_name.trim(),
+        phone: editForm.phone.trim() || null,
+        address: editForm.address.trim() || null,
+        bio: editForm.bio.trim() || null,
+        photo_url: editForm.photo_url ?? null,
+        hierarchy_role: editForm.hierarchy_role,
+      });
+      setMembers((prev: Profile[]) => prev.map((m) => (m.id === updated.id ? updated : m)));
+      toast.success(`${updated.display_name} updated`);
+      // Notify the member (best-effort)
+      try {
+        const roleChanged = updated.hierarchy_role !== editing.hierarchy_role;
+        await createNotification({
+          recipient_id: updated.id,
+          kind: roleChanged ? 'role_changed' : 'system',
+          title: roleChanged ? 'Your profile was updated' : 'Your profile was edited',
+          message: roleChanged
+            ? `You are now listed as "${updated.hierarchy_role}".`
+            : `An administrator updated your profile information.`,
+          link: '/member-dashboard?tab=profile',
+          payload: { updated_fields: Object.keys(editForm) },
+        });
+      } catch (err) {
+        console.warn('Member notification failed (non-fatal):', err);
+      }
+      closeEdit();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
   const filtered = useMemo(() => {
     return members.filter((m) =>
       !search ? true : m.display_name.toLowerCase().includes(search.toLowerCase())
@@ -652,24 +746,126 @@ const MembersTab: React.FC<{
                     {new Date(m.joined_at).toLocaleDateString()}
                   </td>
                   <td className="py-3 text-right">
-                    <button
-                      onClick={() => handleDelete(m)}
-                      className="p-2 rounded hover:bg-destructive/10 text-destructive inline-flex items-center gap-1"
-                      aria-label={`Delete ${m.display_name}`}
-                      title="Delete member"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </CardContent>
-    </Card>
-  );
-};
+                                      <div className="inline-flex items-center gap-1">
+                                        <button
+                                          onClick={() => openEdit(m)}
+                                          className="p-2 rounded hover:bg-primary/10 text-primary inline-flex items-center gap-1"
+                                          aria-label={`Edit ${m.display_name}`}
+                                          title="Edit member"
+                                        >
+                                          <Edit3 className="w-4 h-4" />
+                                        </button>
+                                        <button
+                                          onClick={() => handleDelete(m)}
+                                          className="p-2 rounded hover:bg-destructive/10 text-destructive inline-flex items-center gap-1"
+                                          aria-label={`Delete ${m.display_name}`}
+                                          title="Delete member"
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </CardContent>
+
+                        {/* Edit Member Modal */}
+                              {editing && (
+                              <Modal onClose={closeEdit} title={`Edit ${editing.display_name}`} wide>
+                          {editing && (
+                            <div className="space-y-4">
+                              {/* Photo */}
+                              <div className="flex items-center gap-4">
+                                <img
+                                  src={editForm.photo_url || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(editForm.display_name)}`}
+                                  alt="avatar preview"
+                                  className="w-20 h-20 rounded-full object-cover ring-2 ring-background shadow"
+                                />
+                                <div className="flex-1">
+                                  <label className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-input bg-background hover:bg-muted cursor-pointer text-sm">
+                                    <input
+                                      type="file"
+                                      accept="image/jpeg,image/png,image/webp,image/gif"
+                                      className="hidden"
+                                      onChange={handlePhotoUpload}
+                                    />
+                                    {uploadingPhoto ? 'Uploading…' : 'Change photo'}
+                                  </label>
+                                  {editForm.photo_url && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditForm((f) => ({ ...f, photo_url: null }))}
+                                      className="ml-2 text-xs text-muted-foreground hover:text-destructive"
+                                    >
+                                      Remove photo
+                                    </button>
+                                  )}
+                                  <p className="text-xs text-muted-foreground mt-1">JPEG/PNG/WebP, max 5 MB</p>
+                                </div>
+                              </div>
+
+                              <Input
+                                label="Display Name *"
+                                value={editForm.display_name}
+                                onChange={(e) => setEditForm((f) => ({ ...f, display_name: e.target.value }))}
+                              />
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <Input
+                                  label="Phone"
+                                  value={editForm.phone}
+                                  onChange={(e) => setEditForm((f) => ({ ...f, phone: e.target.value }))}
+                                  placeholder="+254 700 000000"
+                                />
+                                <div>
+                                  <label className="block text-sm font-medium mb-1.5">Hierarchy Role</label>
+                                  <select
+                                    value={editForm.hierarchy_role}
+                                    onChange={(e) => setEditForm((f) => ({ ...f, hierarchy_role: e.target.value as HierarchyRole }))}
+                                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                                  >
+                                    {HIERARCHY_ORDER.map((r) => (
+                                      <option key={r} value={r}>{r}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </div>
+
+                              <Input
+                                label="Address"
+                                value={editForm.address}
+                                onChange={(e) => setEditForm((f) => ({ ...f, address: e.target.value }))}
+                                placeholder="e.g. Catholic Silanga Parish, Nairobi"
+                              />
+
+                              <Textarea
+                                label="Bio"
+                                rows={3}
+                                value={editForm.bio}
+                                onChange={(e) => setEditForm((f) => ({ ...f, bio: e.target.value }))}
+                                placeholder="Short bio shown on the public Members page"
+                              />
+
+                              <p className="text-xs text-muted-foreground">
+                                The member will receive an in-app notification after you save.
+                              </p>
+
+                              <div className="flex justify-end gap-2 pt-2">
+                                <Button variant="outline" onClick={closeEdit} disabled={saving}>Cancel</Button>
+                                <Button onClick={handleSaveMember} isLoading={saving}>
+                                  Save changes
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+                        </Modal>
+                                              )}
+                                              </Card>
+                          );
+                        };
 
 // ============================================================
 // TASKS TAB

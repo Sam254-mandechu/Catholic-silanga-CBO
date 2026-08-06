@@ -1,5 +1,12 @@
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Target, Eye, Heart, Cross } from 'lucide-react';
+import { getSiteContentMap } from '../../services/supabaseData';
+
+const DEFAULT_MISSION =
+  'To deepen the Catholic faith of our members through worship, education, charity, and fellowship, while serving the broader Silanga community with the love of Christ.';
+const DEFAULT_VISION =
+  'A vibrant, inclusive Catholic community where every member grows in faith, every family finds support, and every neighbor experiences the love of God through our actions.';
 
 const values = [
   {
@@ -20,6 +27,26 @@ const values = [
 ];
 
 export const MissionVision: React.FC = () => {
+  const [mission, setMission] = useState(DEFAULT_MISSION);
+  const [vision, setVision] = useState(DEFAULT_VISION);
+
+  // Pull admin-editable mission + vision from site_content. Falls back to
+  // hardcoded defaults if the rows don't exist yet (the schema seeds them).
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const map = await getSiteContentMap(['mission', 'vision']);
+        if (!mounted) return;
+        if (map.mission) setMission(map.mission);
+        if (map.vision) setVision(map.vision);
+      } catch (err) {
+        console.warn('Failed to load mission/vision from site_content', err);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
+
   return (
     <section className="py-20 bg-gradient-to-b from-background to-primary/5">
       <div className="container mx-auto px-4 sm:px-6 lg:px-8">
@@ -51,10 +78,8 @@ export const MissionVision: React.FC = () => {
                 <Target className="w-6 h-6 text-primary" />
               </div>
               <h3 className="font-heading text-2xl font-bold mb-3">Our Mission</h3>
-              <p className="text-primary-foreground/90 leading-relaxed">
-                To empower the Catholic Silanga community through faith-based programs that
-                promote holistic human development — spiritual, educational, economic, and social —
-                while upholding the dignity of every person and stewarding God's creation.
+              <p className="text-primary-foreground/90 leading-relaxed whitespace-pre-line">
+                {mission}
               </p>
             </div>
           </motion.div>
@@ -73,10 +98,8 @@ export const MissionVision: React.FC = () => {
                 <Eye className="w-6 h-6 text-gold-800" />
               </div>
               <h3 className="font-heading text-2xl font-bold mb-3">Our Vision</h3>
-              <p className="text-white/95 leading-relaxed">
-                A thriving, self-reliant community where every member lives with dignity, walks
-                with faith, and contributes meaningfully to society — guided by Catholic
-                teaching and sustained through collaborative partnerships.
+              <p className="text-white/95 leading-relaxed whitespace-pre-line">
+                {vision}
               </p>
             </div>
           </motion.div>

@@ -11,6 +11,7 @@ import { NewsEventsPage } from './pages/NewsEventsPage';
 import { ContactPage } from './pages/ContactPage';
 import { MembersPage } from './pages/MembersPage';
 import { ContributionsPage } from './pages/ContributionsPage';
+import { TermsPage } from './pages/TermsPage';
 import { MeetingsPage } from './pages/MeetingsPage';
 import { SecretaryPortal } from './pages/SecretaryPortal';
 import { TreasurerPortal } from './pages/TreasurerPortal';
@@ -40,6 +41,7 @@ function App() {
               <Route path="/contact" element={<ContactPage />} />
               <Route path="/members" element={<MembersPage />} />
               <Route path="/contributions" element={<ContributionsPage />} />
+              <Route path="/terms" element={<TermsPage />} />
               <Route
                 path="/meetings"
                 element={

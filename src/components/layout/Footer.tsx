@@ -11,6 +11,7 @@ const quickLinks = [
   { name: 'News & Events', path: '/news-events' },
   { name: 'Contributions', path: '/contributions' },
   { name: 'Contact', path: '/contact' },
+  { name: 'Terms', path: '/terms' },
 ];
 
 const supportLinks = [

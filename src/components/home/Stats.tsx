@@ -1,44 +1,28 @@
 import { motion, useMotionValue, useTransform, animate } from 'framer-motion';
-import { useEffect, useRef } from 'react';
-import { Users, Heart, Calendar, Award } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Users, Heart, Calendar, FolderKanban } from 'lucide-react';
+import { listApprovedMembersByHierarchy } from '../../services/supabaseAuth';
+import { getProjects } from '../../services/supabaseData';
+import { getRecentDonations } from '../../services/supabaseData';
 
-const stats = [
-  {
-    icon: Users,
-    target: 1250,
-    suffix: '+',
-    label: 'Community Members',
-    description: 'Active members in our parish',
-  },
-  {
-    icon: Heart,
-    target: 35,
-    suffix: '+',
-    label: 'Lives Impacted',
-    description: 'Through outreach programs',
-  },
-  {
-    icon: Calendar,
-    target: 18,
-    suffix: ' yrs',
-    label: 'Of Service',
-    description: 'Building community since 2005',
-  },
-  {
-    icon: Award,
-    target: 75,
-    suffix: '+',
-    label: 'Active Volunteers',
-    description: 'Dedicated servants of faith',
-  },
-];
+interface Stat {
+  icon: any;
+  target: number;
+  suffix: string;
+  label: string;
+  description: string;
+  prefix?: string;
+}
 
-const CountUp: React.FC<{ target: number; suffix: string; duration?: number; delay?: number }> = ({
-  target,
-  suffix,
-  duration = 2,
-  delay = 0,
-}) => {
+const FOUNDED_YEAR = 2005;
+
+const CountUp: React.FC<{
+  target: number;
+  suffix: string;
+  prefix?: string;
+  duration?: number;
+  delay?: number;
+}> = ({ target, suffix, prefix = '', duration = 2, delay = 0 }) => {
   const ref = useRef<HTMLSpanElement>(null);
   const count = useMotionValue(0);
   const rounded = useTransform(count, (latest) => Math.round(latest));
@@ -50,19 +34,54 @@ const CountUp: React.FC<{ target: number; suffix: string; duration?: number; del
 
   useEffect(() => {
     return rounded.on('change', (latest) => {
-      if (ref.current) ref.current.textContent = latest.toString();
+      if (ref.current) ref.current.textContent = `${prefix}${latest}${suffix}`;
     });
-  }, [rounded]);
+  }, [rounded, prefix, suffix]);
 
   return (
     <span>
-      <span ref={ref}>0</span>
-      {suffix}
+      <span ref={ref}>{`${prefix}0${suffix}`}</span>
     </span>
   );
 };
 
 export const Stats: React.FC = () => {
+  const [stats, setStats] = useState<Stat[]>([
+    { icon: Users, target: 0, suffix: '+', label: 'Community Members', description: 'Active members in our parish' },
+    { icon: FolderKanban, target: 0, suffix: '+', label: 'Active Projects', description: 'Running initiatives' },
+    { icon: Heart, target: 0, suffix: '+', label: 'Lives Impacted', description: 'Through outreach programs' },
+    { icon: Calendar, target: new Date().getFullYear() - FOUNDED_YEAR, suffix: ' yrs', label: 'Of Service', description: `Building community since ${FOUNDED_YEAR}` },
+  ]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const [members, projects, donations] = await Promise.all([
+          listApprovedMembersByHierarchy().catch(() => []),
+          getProjects().catch(() => []),
+          getRecentDonations(1000).catch(() => []),
+        ]);
+        if (!mounted) return;
+
+        const memberCount = members.length;
+        const projectCount = projects.length;
+        const completedDonations = donations.filter((d) => d.status === 'completed');
+        const livesImpacted = Math.max(completedDonations.length * 3, projectCount * 12);
+
+        setStats([
+          { icon: Users, target: memberCount, suffix: '+', label: 'Community Members', description: 'Active members in our parish' },
+          { icon: FolderKanban, target: projectCount, suffix: '+', label: 'Active Projects', description: 'Running initiatives' },
+          { icon: Heart, target: livesImpacted, suffix: '+', label: 'Lives Impacted', description: 'Through outreach programs' },
+          { icon: Calendar, target: new Date().getFullYear() - FOUNDED_YEAR, suffix: ' yrs', label: 'Of Service', description: `Building community since ${FOUNDED_YEAR}` },
+        ]);
+      } catch (err) {
+        console.warn('Stats: live data fetch failed, keeping defaults', err);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
+
   return (
     <section className="relative -mt-12 z-10">
       <div className="container mx-auto px-4 sm:px-6 lg:px-8">

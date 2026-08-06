@@ -7,6 +7,7 @@ import { Button } from '../ui/Button';
 import { useDarkMode } from '../../hooks/useDarkMode';
 import { useAuth } from '../../contexts/AuthContext';
 import { ADMIN_EMAILS } from '../../config/adminConfig';
+import { NotificationBell } from '../common/NotificationBell';
 
 const navLinks = [
   { name: 'Home', path: '/' },
@@ -100,15 +101,17 @@ export const Navbar: React.FC = () => {
           </div>
 
           <div className="hidden lg:flex items-center gap-2">
-            <button
-              onClick={() => setIsDark(!isDark)}
-              className="p-2 rounded-md text-foreground/80 hover:text-primary hover:bg-primary/5 transition-colors"
-              aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-            >
-              {isDark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-            </button>
+                      <button
+                        onClick={() => setIsDark(!isDark)}
+                        className="p-2 rounded-md text-foreground/80 hover:text-primary hover:bg-primary/5 transition-colors"
+                        aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+                      >
+                        {isDark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+                      </button>
 
-            {user ? (
+                      {user && <NotificationBell />}
+
+                      {user ? (
               <div className="relative">
                 <button
                   onClick={() => setShowProfileMenu(!showProfileMenu)}
@@ -163,14 +166,15 @@ export const Navbar: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 lg:hidden">
-            <button
-              onClick={() => setIsDark(!isDark)}
-              className="p-2 rounded-md text-foreground/80"
-              aria-label="Toggle dark mode"
-            >
-              {isDark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-            </button>
-            <button
+                      <button
+                        onClick={() => setIsDark(!isDark)}
+                        className="p-2 rounded-md text-foreground/80"
+                        aria-label="Toggle dark mode"
+                      >
+                        {isDark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+                      </button>
+                      {user && <NotificationBell />}
+                      <button
               onClick={() => setIsOpen(!isOpen)}
               className="p-2 rounded-md text-foreground hover:bg-primary/5 transition-colors"
               aria-label="Toggle menu"

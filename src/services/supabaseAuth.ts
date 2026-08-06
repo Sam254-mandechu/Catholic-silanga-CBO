@@ -246,6 +246,50 @@ export async function adminUpdateProfileHierarchyRole(id: string, hierarchy_role
   if (error) throw toAppError(error);
 }
 
+/**
+ * Admin edits another member's profile fields (display name, phone, address,
+ * bio, photo URL, hierarchy role). Bypasses RLS via SECURITY DEFINER RPC when
+ * available; falls back to a direct UPDATE if the RPC isn't installed.
+ */
+export async function adminUpdateMember(
+  id: string,
+  patch: {
+    display_name?: string;
+    phone?: string | null;
+    address?: string | null;
+    bio?: string | null;
+    photo_url?: string | null;
+    hierarchy_role?: HierarchyRole | null;
+  },
+): Promise<Profile> {
+  const updateRow = {
+    ...patch,
+    updated_at: new Date().toISOString(),
+  };
+
+  // Try the secure RPC path first
+  try {
+    const { data, error } = await supabase.rpc('admin_update_member', {
+      target_user_id: id,
+      patch: updateRow,
+    });
+    if (!error && data) return data as Profile;
+    if (error && !/does not exist/i.test(error.message)) throw toAppError(error);
+  } catch (err: any) {
+    if (!/does not exist/i.test(err?.message ?? '')) throw err;
+  }
+
+  // Fallback: direct update (requires admin privileges via RLS).
+  const { data, error } = await supabase
+    .from('profiles')
+    .update(updateRow)
+    .eq('id', id)
+    .select('*')
+    .single();
+  if (error) throw toAppError(error);
+  return data as Profile;
+}
+
 export async function adminDeleteProfile(id: string): Promise<void> {
   await adminRejectMember(id, 'Deleted by administrator');
 }

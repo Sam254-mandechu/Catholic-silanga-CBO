@@ -403,3 +403,59 @@ export interface SystemRoleInput {
   target_user_id: string;
   new_role: Role;
 }
+
+// ---------- v6: Site Content (editable copy) ----------
+/**
+ * Known keys for `site_content`. Add new keys here as the admin grows.
+ * `getSiteContent` returns a `Record<string, string>` so callers can pick
+ * any subset they need; consumers should fall back to hardcoded defaults
+ * when a key is missing.
+ */
+export const SITE_CONTENT_KEYS = [
+  'welcome_message',
+  'welcome_subtitle',
+  'home_hero_image',
+  'mission',
+  'vision',
+  'contact_address',
+  'contact_phone',
+  'contact_email',
+  'contact_hours',
+  'terms_of_service',
+  'privacy_policy',
+] as const;
+
+export type SiteContentKey = (typeof SITE_CONTENT_KEYS)[number];
+
+export interface SiteContentRow {
+  key: string;
+  value: string;
+  updated_by: string | null;
+  updated_at: string;
+}
+
+// ---------- v7: Notifications ----------
+export type NotificationKind =
+  | 'task_assigned'
+  | 'task_updated'
+  | 'task_completed'
+  | 'role_changed'
+  | 'contribution_submitted'
+  | 'contribution_verified'
+  | 'contribution_rejected'
+  | 'announcement_posted'
+  | 'mention'
+  | 'system';
+
+export interface NotificationRow {
+  id: string;
+  recipient_id: string;
+  actor_id: string | null;
+  kind: NotificationKind;
+  title: string;
+  message: string;
+  link: string | null;
+  payload: Record<string, unknown> | null;
+  read_at: string | null;
+  created_at: string;
+}
