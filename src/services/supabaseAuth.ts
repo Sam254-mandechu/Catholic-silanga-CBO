@@ -250,6 +250,65 @@ export async function adminDeleteProfile(id: string): Promise<void> {
   await adminRejectMember(id, 'Deleted by administrator');
 }
 
+/**
+ * Hard-delete a member. Uses the database RPC `admin_delete_member(target_user_id)`
+ * so that RLS-protected cascading deletes (auth user, related rows) happen in one
+ * server-side transaction. The RPC returns boolean (true on success).
+ *
+ * Falls back to a soft-delete via `adminDeleteProfile` if the RPC isn't installed
+ * yet (e.g. on older schemas where schema_v5.sql hasn't been applied).
+ */
+export async function adminDeleteMember(target_user_id: string): Promise<void> {
+  try {
+    const { data, error } = await supabase.rpc('admin_delete_member', { target_user_id });
+    if (!error) {
+      if (data === false) throw new Error('Member could not be deleted');
+      return;
+    }
+    if (!/does not exist/i.test(error.message)) throw toAppError(error);
+  } catch (err: any) {
+    if (!/does not exist/i.test(err?.message ?? '')) {
+      // RPC exists but failed — bubble up.
+      throw toAppError(err);
+    }
+    // RPC missing → fall through to soft-delete.
+  }
+  await adminDeleteProfile(target_user_id);
+}
+
+/**
+ * Set a profile's *system role* (admin | moderator | secretary | treasurer | member).
+ * This is distinct from `hierarchy_role`, which describes the CBO's organisational
+ * position (Chairperson, Secretary, etc.).
+ *
+ * Goes through the SECURITY DEFINER RPC `admin_set_system_role(target_user_id, new_role)`
+ * which validates the requested role against the allowed set and enforces admin-only
+ * callers. Returns the updated Profile row.
+ *
+ * Falls back to a direct UPDATE via `adminUpdateProfileRole` if the RPC isn't
+ * installed yet.
+ */
+export async function adminSetSystemRole(
+  target_user_id: string,
+  new_role: Role,
+): Promise<Profile> {
+  try {
+    const { data, error } = await supabase.rpc('admin_set_system_role', {
+      target_user_id,
+      new_role,
+    });
+    if (!error) return data as Profile;
+    if (!/does not exist/i.test(error.message)) throw toAppError(error);
+  } catch (err: any) {
+    if (!/does not exist/i.test(err?.message ?? '')) {
+      throw toAppError(err);
+    }
+  }
+  // RPC missing — direct fallback (will fail RLS unless caller is admin).
+  await adminUpdateProfileRole(target_user_id, new_role);
+  return (await getProfile(target_user_id)) ?? Promise.reject(new Error('Profile not found after update'));
+}
+
 export async function promoteCurrentUserToAdmin(): Promise<Profile> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Not signed in');

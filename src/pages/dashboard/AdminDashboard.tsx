@@ -5,7 +5,8 @@ import {
   Users, FolderKanban, Image as ImageIcon, Newspaper, Calendar, Mail,
   BarChart3, Shield, Search, Trash2, Edit3, Plus, X, LogOut,
   ClipboardList, Heart, Banknote, Megaphone, CheckCircle, XCircle,
-  AlertCircle, Clock, Phone, Loader2,
+  AlertCircle, Clock, Phone, Loader2, CalendarDays, Vote, DollarSign,
+  ListChecks, FileText,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -23,14 +24,26 @@ import {
   addEvent, updateEvent, deleteEvent,
   addGalleryImage, deleteGalleryImage,
   uploadGalleryFile, deleteGalleryFile,
+  // v5 — Meetings / Polls / Financial
+  getMeetings, createMeeting, deleteMeeting, updateMeeting,
+  getMeetingRsvps, getMeetingAttendance, getMeetingMinutes,
+  writeMeetingMinutes, markMeetingAttendance,
+  getPolls, getPollOptions, createPoll, closePoll, deletePoll, getPollResults,
+  getExpenses, createExpense, approveExpense, deleteExpense,
+  getFinancialReports, submitFinancialReport, approveFinancialReport,
 } from '../../services/supabaseData';
 import {
   adminListProfiles, adminVerifyMember, adminRejectMember,
-  adminUpdateProfileHierarchyRole,
+  adminUpdateProfileHierarchyRole, adminDeleteMember, adminSetSystemRole,
 } from '../../services/supabaseAuth';
 import type {
   Project, News, Event, GalleryImage, ContactSubmission, Profile,
   HierarchyRole, Task, Donation, PaymentMethod, PaymentMethodType, Announcement,
+  Role,
+  Meeting, MeetingRsvp, MeetingAttendance, MeetingMinutes,
+  Poll, PollOption, PollType,
+  Expense, ExpenseCategory,
+  FinancialReport,
 } from '../../types/database';
 import { HIERARCHY_ORDER } from '../../types/database';
 import {
@@ -41,7 +54,20 @@ import {
 type Tab =
   | 'overview' | 'verification' | 'members' | 'tasks' | 'projects'
   | 'gallery' | 'news' | 'events' | 'contacts' | 'contributions'
-  | 'payment-methods' | 'announcements' | 'analytics' | 'roles';
+  | 'payment-methods' | 'announcements' | 'analytics' | 'roles'
+  | 'meetings' | 'polls' | 'financial';
+
+/** System roles an admin can assign on the profiles.role column. */
+const SYSTEM_ROLES: Role[] = ['member', 'moderator', 'secretary', 'treasurer', 'admin'];
+
+/** Friendly labels for the system role select. */
+const SYSTEM_ROLE_LABELS: Record<Role, string> = {
+  member: 'Member',
+  moderator: 'Moderator',
+  secretary: 'Secretary',
+  treasurer: 'Treasurer',
+  admin: 'Admin',
+};
 
 const PIE_COLORS = ['#a82524', '#f59e0b', '#15803d', '#6366f1', '#db2777', '#0891b2'];
 
@@ -51,51 +77,75 @@ export const AdminDashboard: React.FC = () => {
   const [tab, setTab] = useState<Tab>('overview');
 
   // Data
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [news, setNews] = useState<News[]>([]);
-  const [events, setEvents] = useState<Event[]>([]);
-  const [gallery, setGallery] = useState<GalleryImage[]>([]);
-  const [contacts, setContacts] = useState<ContactSubmission[]>([]);
-  const [members, setMembers] = useState<Profile[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [donations, setDonations] = useState<Donation[]>([]);
-  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
-  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
-  const [loading, setLoading] = useState(true);
+    const [projects, setProjects] = useState<Project[]>([]);
+    const [news, setNews] = useState<News[]>([]);
+    const [events, setEvents] = useState<Event[]>([]);
+    const [gallery, setGallery] = useState<GalleryImage[]>([]);
+    const [contacts, setContacts] = useState<ContactSubmission[]>([]);
+    const [members, setMembers] = useState<Profile[]>([]);
+    const [tasks, setTasks] = useState<Task[]>([]);
+    const [donations, setDonations] = useState<Donation[]>([]);
+    const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
+    const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+    // v5 — Meetings / Polls / Financial
+    const [meetings, setMeetings] = useState<Meeting[]>([]);
+    const [polls, setPolls] = useState<Poll[]>([]);
+    const [pollOptionsByPoll, setPollOptionsByPoll] = useState<Record<string, PollOption[]>>({});
+    const [expenses, setExpenses] = useState<Expense[]>([]);
+    const [financialReports, setFinancialReports] = useState<FinancialReport[]>([]);
+    const [loading, setLoading] = useState(true);
 
-  const [search, setSearch] = useState('');
-  const [showProjectModal, setShowProjectModal] = useState(false);
-  const [editingProject, setEditingProject] = useState<Project | null>(null);
+    const [search, setSearch] = useState('');
+    const [showProjectModal, setShowProjectModal] = useState(false);
+    const [editingProject, setEditingProject] = useState<Project | null>(null);
 
-  useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      try {
-        const [p, n, e, g, c, m, t, d, pm, an] = await Promise.all([
-          getProjects(),
-          getNews(),
-          getEvents(),
-          getGalleryImages(),
-          adminListContacts(),
-          adminListProfiles(),
-          getAllTasks(),
-          getRecentDonations(50),
-          getPaymentMethods(),
-          getAnnouncements(),
-        ]);
-        if (mounted) {
-          setProjects(p); setNews(n); setEvents(e); setGallery(g); setContacts(c);
-          setMembers(m); setTasks(t); setDonations(d); setPaymentMethods(pm); setAnnouncements(an);
+    useEffect(() => {
+      let mounted = true;
+      const load = async () => {
+        try {
+          const [p, n, e, g, c, m, t, d, pm, an, mt, pl, ex, fr] = await Promise.all([
+            getProjects(),
+            getNews(),
+            getEvents(),
+            getGalleryImages(),
+            adminListContacts(),
+            adminListProfiles(),
+            getAllTasks(),
+            getRecentDonations(50),
+            getPaymentMethods(),
+            getAnnouncements(),
+            getMeetings().catch(() => [] as Meeting[]),
+            getPolls().catch(() => [] as Poll[]),
+            getExpenses().catch(() => [] as Expense[]),
+            getFinancialReports().catch(() => [] as FinancialReport[]),
+          ]);
+
+          // Lazy-load poll options for each poll so we can render "X options" badges.
+          const optsMap: Record<string, PollOption[]> = {};
+          await Promise.all((pl as Poll[]).map(async (poll) => {
+            try {
+              optsMap[poll.id] = await getPollOptions(poll.id);
+            } catch {
+              optsMap[poll.id] = [];
+            }
+          }));
+
+          if (mounted) {
+            setProjects(p); setNews(n); setEvents(e); setGallery(g); setContacts(c);
+            setMembers(m); setTasks(t); setDonations(d); setPaymentMethods(pm); setAnnouncements(an);
+            setMeetings(mt as Meeting[]); setPolls(pl as Poll[]); setExpenses(ex as Expense[]);
+            setFinancialReports(fr as FinancialReport[]);
+            setPollOptionsByPoll(optsMap);
+          }
+        } catch (err) {
+          console.warn('Admin data load failed', err);
+        } finally {
+          if (mounted) setLoading(false);
         }
-      } catch (err) {
-        console.warn('Admin data load failed', err);
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    };
-    load();
-    return () => { mounted = false; };
-  }, []);
+      };
+      load();
+      return () => { mounted = false; };
+    }, []);
 
   const handleLogout = async () => {
     await logout();
@@ -115,30 +165,45 @@ export const AdminDashboard: React.FC = () => {
   };
 
   const tabs: { id: Tab; label: string; icon: any }[] = [
-    { id: 'overview', label: 'Overview', icon: BarChart3 },
-    { id: 'verification', label: 'Verification', icon: Shield },
-    { id: 'members', label: 'Members', icon: Users },
-    { id: 'tasks', label: 'Tasks', icon: ClipboardList },
-    { id: 'projects', label: 'Projects', icon: FolderKanban },
-    { id: 'gallery', label: 'Gallery', icon: ImageIcon },
-    { id: 'news', label: 'News', icon: Newspaper },
-    { id: 'events', label: 'Events', icon: Calendar },
-    { id: 'contributions', label: 'Contributions', icon: Heart },
-    { id: 'payment-methods', label: 'Payment Methods', icon: Banknote },
-    { id: 'announcements', label: 'Announcements', icon: Megaphone },
-    { id: 'contacts', label: 'Contacts', icon: Mail },
-    { id: 'analytics', label: 'Analytics', icon: BarChart3 },
-    { id: 'roles', label: 'User Roles', icon: Shield },
-  ];
+      { id: 'overview', label: 'Overview', icon: BarChart3 },
+      { id: 'verification', label: 'Verification', icon: Shield },
+      { id: 'members', label: 'Members', icon: Users },
+      { id: 'tasks', label: 'Tasks', icon: ClipboardList },
+      { id: 'projects', label: 'Projects', icon: FolderKanban },
+      { id: 'gallery', label: 'Gallery', icon: ImageIcon },
+      { id: 'news', label: 'News', icon: Newspaper },
+      { id: 'events', label: 'Events', icon: Calendar },
+      { id: 'meetings', label: 'Meetings', icon: CalendarDays },
+      { id: 'polls', label: 'Polls', icon: Vote },
+      { id: 'financial', label: 'Financial', icon: DollarSign },
+      { id: 'contributions', label: 'Contributions', icon: Heart },
+      { id: 'payment-methods', label: 'Payment Methods', icon: Banknote },
+      { id: 'announcements', label: 'Announcements', icon: Megaphone },
+      { id: 'contacts', label: 'Contacts', icon: Mail },
+      { id: 'analytics', label: 'Analytics', icon: BarChart3 },
+      { id: 'roles', label: 'User Roles', icon: Shield },
+    ];
 
   const stats = [
-    { label: 'Pending Verifications', value: members.filter((m) => m.status === 'pending').length, icon: Shield, color: 'text-gold-700' },
-    { label: 'Active Members', value: members.filter((m) => m.status === 'active').length, icon: Users, color: 'text-primary' },
-    { label: 'Open Tasks', value: tasks.filter((t) => t.status === 'pending' || t.status === 'in_progress').length, icon: ClipboardList, color: 'text-accent' },
-    { label: 'Pending Contributions', value: donations.filter((d) => d.status === 'pending').length, icon: Heart, color: 'text-pink-700' },
-    { label: 'Verified Contributions', value: donations.filter((d) => d.status === 'completed').length, icon: CheckCircle, color: 'text-success' },
-    { label: 'Active Projects', value: projects.length, icon: FolderKanban, color: 'text-primary' },
-  ];
+      { label: 'Pending Verifications', value: members.filter((m) => m.status === 'pending').length, icon: Shield, color: 'text-gold-700' },
+      { label: 'Active Members', value: members.filter((m) => m.status === 'active').length, icon: Users, color: 'text-primary' },
+      { label: 'Open Tasks', value: tasks.filter((t) => t.status === 'pending' || t.status === 'in_progress').length, icon: ClipboardList, color: 'text-accent' },
+      { label: 'Pending Contributions', value: donations.filter((d) => d.status === 'pending').length, icon: Heart, color: 'text-pink-700' },
+      { label: 'Verified Contributions', value: donations.filter((d) => d.status === 'completed').length, icon: CheckCircle, color: 'text-success' },
+      { label: 'Active Projects', value: projects.length, icon: FolderKanban, color: 'text-primary' },
+      {
+        label: 'Upcoming Meetings',
+        value: meetings.filter((m) => m.status === 'scheduled' && new Date(m.scheduled_at).getTime() >= Date.now()).length,
+        icon: CalendarDays,
+        color: 'text-primary',
+      },
+      {
+        label: 'Active Polls',
+        value: polls.filter((p) => p.status === 'open' && new Date(p.closes_at).getTime() >= Date.now()).length,
+        icon: Vote,
+        color: 'text-gold-700',
+      },
+    ];
 
   return (
     <section className="min-h-screen pt-24 pb-16 bg-gradient-to-b from-background to-muted/30">
@@ -262,8 +327,32 @@ export const AdminDashboard: React.FC = () => {
               <AnnouncementsTab announcements={announcements} setAnnouncements={setAnnouncements} />
             )}
             {tab === 'analytics' && <AnalyticsTab stats={stats} projects={projects} donations={donations} />}
-            {tab === 'roles' && <RolesTab members={members} setMembers={setMembers} />}
-          </main>
+                        {tab === 'roles' && <RolesTab members={members} setMembers={setMembers} />}
+                        {tab === 'meetings' && (
+                          <MeetingsTab
+                            meetings={meetings}
+                            setMeetings={setMeetings}
+                            members={members}
+                          />
+                        )}
+                        {tab === 'polls' && (
+                          <PollsTab
+                            polls={polls}
+                            setPolls={setPolls}
+                            optionsByPoll={pollOptionsByPoll}
+                            setOptionsByPoll={setPollOptionsByPoll}
+                          />
+                        )}
+                        {tab === 'financial' && (
+                          <FinancialTab
+                            expenses={expenses}
+                            setExpenses={setExpenses}
+                            reports={financialReports}
+                            setReports={setFinancialReports}
+                            donations={donations}
+                          />
+                        )}
+                      </main>
         </div>
 
         {showProjectModal && (
@@ -466,6 +555,30 @@ const MembersTab: React.FC<{
     }
   };
 
+  const handleSystemRoleChange = async (id: string, role: Role) => {
+    try {
+      await adminSetSystemRole(id, role);
+      setMembers((prev: Profile[]) => prev.map((m) => (m.id === id ? { ...m, role } : m)));
+      toast.success(`System role set to ${SYSTEM_ROLE_LABELS[role]}`);
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to update system role');
+    }
+  };
+
+  const handleDelete = async (m: Profile) => {
+    const confirmed = window.confirm(
+      `Permanently delete ${m.display_name}? This removes their account and related rows. This cannot be undone.`,
+    );
+    if (!confirmed) return;
+    try {
+      await adminDeleteMember(m.id);
+      setMembers((prev: Profile[]) => prev.filter((x) => x.id !== m.id));
+      toast.success(`${m.display_name} removed`);
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to delete member');
+    }
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -485,8 +598,10 @@ const MembersTab: React.FC<{
                 <th className="py-2 font-semibold">Member</th>
                 <th className="py-2 font-semibold hidden sm:table-cell">Member Code</th>
                 <th className="py-2 font-semibold">Hierarchy</th>
+                <th className="py-2 font-semibold">System Role</th>
                 <th className="py-2 font-semibold">Status</th>
                 <th className="py-2 font-semibold hidden md:table-cell">Joined</th>
+                <th className="py-2 font-semibold text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -512,6 +627,18 @@ const MembersTab: React.FC<{
                     </select>
                   </td>
                   <td className="py-3">
+                    <select
+                      value={m.role}
+                      onChange={(e) => handleSystemRoleChange(m.id, e.target.value as Role)}
+                      disabled={m.status !== 'active'}
+                      className="text-xs rounded border-input bg-background px-2 py-1 border disabled:opacity-50"
+                    >
+                      {SYSTEM_ROLES.map((r) => (
+                        <option key={r} value={r}>{SYSTEM_ROLE_LABELS[r]}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="py-3">
                     <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
                       m.status === 'active' ? 'bg-success/15 text-success' :
                       m.status === 'pending' ? 'bg-gold-400/20 text-gold-700' :
@@ -522,6 +649,16 @@ const MembersTab: React.FC<{
                   </td>
                   <td className="py-3 hidden md:table-cell text-xs text-muted-foreground">
                     {new Date(m.joined_at).toLocaleDateString()}
+                  </td>
+                  <td className="py-3 text-right">
+                    <button
+                      onClick={() => handleDelete(m)}
+                      className="p-2 rounded hover:bg-destructive/10 text-destructive inline-flex items-center gap-1"
+                      aria-label={`Delete ${m.display_name}`}
+                      title="Delete member"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -2063,12 +2200,1094 @@ const ProjectModal: React.FC<{
           </div>
         </div>
         <div className="flex justify-end gap-2 p-6 border-t">
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSave} isLoading={saving}>
-            {project ? 'Save Changes' : 'Add Project'}
-          </Button>
-        </div>
-      </motion.div>
-    </motion.div>
-  );
-};
+                  <Button variant="outline" onClick={onClose}>Cancel</Button>
+                  <Button onClick={handleSave} isLoading={saving}>
+                    {project ? 'Save Changes' : 'Add Project'}
+                  </Button>
+                </div>
+              </motion.div>
+            </motion.div>
+          );
+        };
+
+        // ============================================================
+        // v5 — MEETINGS TAB
+        // ============================================================
+        const MeetingsTab: React.FC<{
+          meetings: Meeting[];
+          setMeetings: (p: any) => void;
+          members: Profile[];
+        }> = ({ meetings, setMeetings, members }) => {
+          const [showForm, setShowForm] = useState(false);
+          const [editing, setEditing] = useState<Meeting | null>(null);
+          const [form, setForm] = useState({
+            title: '', description: '', scheduled_at: '', location: '',
+            meeting_type: 'general' as Meeting['meeting_type'],
+          });
+          const [rsvpMeeting, setRsvpMeeting] = useState<Meeting | null>(null);
+          const [attendanceMeeting, setAttendanceMeeting] = useState<Meeting | null>(null);
+          const [minutesMeeting, setMinutesMeeting] = useState<Meeting | null>(null);
+          const [rsvpsByMeeting, setRsvpsByMeeting] = useState<Record<string, MeetingRsvp[]>>({});
+          const [attendanceByMeeting, setAttendanceByMeeting] = useState<Record<string, MeetingAttendance[]>>({});
+          const [minutesByMeeting, setMinutesByMeeting] = useState<Record<string, MeetingMinutes | null>>({});
+
+          const openNew = () => {
+            setEditing(null);
+            setForm({ title: '', description: '', scheduled_at: '', location: '', meeting_type: 'general' });
+            setShowForm(true);
+          };
+          const openEdit = (m: Meeting) => {
+            setEditing(m);
+            setForm({
+              title: m.title,
+              description: m.description ?? '',
+              scheduled_at: m.scheduled_at ? m.scheduled_at.slice(0, 16) : '',
+              location: m.location ?? '',
+              meeting_type: m.meeting_type,
+            });
+            setShowForm(true);
+          };
+
+          const handleSave = async (e: React.FormEvent) => {
+            e.preventDefault();
+            try {
+              const payload = {
+                title: form.title,
+                description: form.description || null,
+                scheduled_at: new Date(form.scheduled_at).toISOString(),
+                location: form.location || null,
+                meeting_type: form.meeting_type,
+              };
+              if (editing) {
+                const updated = await updateMeeting(editing.id, payload);
+                setMeetings((prev: Meeting[]) => prev.map((x) => (x.id === updated.id ? updated : x)));
+                toast.success('Meeting updated');
+              } else {
+                const created = await createMeeting(payload as any);
+                setMeetings((prev: Meeting[]) => [created, ...prev]);
+                toast.success('Meeting created');
+              }
+              setShowForm(false);
+              setEditing(null);
+            } catch (err: any) {
+              toast.error(err?.message ?? 'Failed to save meeting');
+            }
+          };
+
+          const handleDelete = async (m: Meeting) => {
+            if (!confirm(`Delete meeting "${m.title}"?`)) return;
+            try {
+              await deleteMeeting(m.id);
+              setMeetings((prev: Meeting[]) => prev.filter((x) => x.id !== m.id));
+              toast.success('Meeting deleted');
+            } catch (err: any) {
+              toast.error(err?.message ?? 'Failed to delete');
+            }
+          };
+
+          const loadRsvps = async (meeting: Meeting) => {
+            setRsvpMeeting(meeting);
+            try {
+              const rsvps = await getMeetingRsvps(meeting.id);
+              setRsvpsByMeeting((prev) => ({ ...prev, [meeting.id]: rsvps }));
+            } catch (err: any) {
+              toast.error(err?.message ?? 'Failed to load RSVPs');
+            }
+          };
+
+          const loadAttendance = async (meeting: Meeting) => {
+            setAttendanceMeeting(meeting);
+            try {
+              const att = await getMeetingAttendance(meeting.id);
+              setAttendanceByMeeting((prev) => ({ ...prev, [meeting.id]: att }));
+            } catch (err: any) {
+              toast.error(err?.message ?? 'Failed to load attendance');
+            }
+          };
+
+          const handleMarkAttendance = async (
+            meetingId: string,
+            memberId: string,
+            status: MeetingAttendance['status'],
+          ) => {
+            try {
+              await markMeetingAttendance(meetingId, memberId, status);
+              const updated = await getMeetingAttendance(meetingId);
+              setAttendanceByMeeting((prev) => ({ ...prev, [meetingId]: updated }));
+              toast.success('Attendance marked');
+            } catch (err: any) {
+              toast.error(err?.message ?? 'Failed to mark attendance');
+            }
+          };
+
+          const loadMinutes = async (meeting: Meeting) => {
+            setMinutesMeeting(meeting);
+            try {
+              const minutes = await getMeetingMinutes(meeting.id);
+              setMinutesByMeeting((prev) => ({ ...prev, [meeting.id]: minutes }));
+            } catch (err: any) {
+              toast.error(err?.message ?? 'Failed to load minutes');
+            }
+          };
+
+          return (
+            <Card>
+              <CardHeader className="flex flex-row justify-between items-center flex-wrap gap-3">
+                <CardTitle className="flex items-center gap-2">
+                  <CalendarDays className="w-5 h-5 text-primary" /> Meetings ({meetings.length})
+                </CardTitle>
+                <Button size="sm" leftIcon={<Plus className="w-4 h-4" />} onClick={openNew}>
+                  Create Meeting
+                </Button>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {showForm && (
+                  <form onSubmit={handleSave} className="space-y-3 border-b pb-4 mb-4">
+                    <Input
+                      label="Title *"
+                      required
+                      value={form.title}
+                      onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+                    />
+                    <Textarea
+                      label="Description"
+                      rows={2}
+                      value={form.description}
+                      onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                    />
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <Input
+                        label="Scheduled at *"
+                        type="datetime-local"
+                        required
+                        value={form.scheduled_at}
+                        onChange={(e) => setForm((f) => ({ ...f, scheduled_at: e.target.value }))}
+                      />
+                      <Input
+                        label="Location"
+                        value={form.location}
+                        onChange={(e) => setForm((f) => ({ ...f, location: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1.5">Meeting type</label>
+                      <select
+                        value={form.meeting_type}
+                        onChange={(e) => setForm((f) => ({ ...f, meeting_type: e.target.value as Meeting['meeting_type'] }))}
+                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      >
+                        <option value="general">General</option>
+                        <option value="committee">Committee</option>
+                        <option value="emergency">Emergency</option>
+                        <option value="agm">AGM (Annual General Meeting)</option>
+                      </select>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button type="submit">{editing ? 'Update' : 'Create'}</Button>
+                      <Button type="button" variant="outline" onClick={() => { setShowForm(false); setEditing(null); }}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </form>
+                )}
+
+                {meetings.length === 0 && !showForm ? (
+                  <div className="text-center py-12">
+                    <CalendarDays className="w-12 h-12 text-muted-foreground mx-auto mb-2" />
+                    <p className="text-sm text-muted-foreground mb-3">No meetings scheduled yet.</p>
+                    <Button size="sm" leftIcon={<Plus className="w-4 h-4" />} onClick={openNew}>
+                      Schedule the first meeting
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {meetings.map((m) => (
+                      <div key={m.id} className="rounded-lg border p-3 flex flex-col gap-2">
+                        <div className="flex items-start justify-between gap-3 flex-wrap">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h4 className="font-bold">{m.title}</h4>
+                              <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full ${
+                                m.meeting_type === 'agm' ? 'bg-primary/15 text-primary' :
+                                m.meeting_type === 'emergency' ? 'bg-destructive/15 text-destructive' :
+                                'bg-muted text-muted-foreground'
+                              }`}>
+                                {m.meeting_type}
+                              </span>
+                              <span className="text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full border">
+                                {m.status}
+                              </span>
+                            </div>
+                            {m.description && <p className="text-sm text-muted-foreground line-clamp-2">{m.description}</p>}
+                            <p className="text-xs mt-1">
+                              <Clock className="w-3 h-3 inline mr-1" />
+                              {new Date(m.scheduled_at).toLocaleString()}
+                              {m.location && <span className="ml-3">📍 {m.location}</span>}
+                            </p>
+                          </div>
+                          <div className="flex gap-1.5 flex-shrink-0 flex-wrap">
+                            <Button variant="ghost" size="sm" leftIcon={<ListChecks className="w-3 h-3" />} onClick={() => loadRsvps(m)}>
+                              RSVPs
+                            </Button>
+                            <Button variant="ghost" size="sm" leftIcon={<CheckCircle className="w-3 h-3" />} onClick={() => loadAttendance(m)}>
+                              Attendance
+                            </Button>
+                            <Button variant="ghost" size="sm" leftIcon={<FileText className="w-3 h-3" />} onClick={() => loadMinutes(m)}>
+                              Minutes
+                            </Button>
+                            <Button variant="ghost" size="sm" leftIcon={<Edit3 className="w-3 h-3" />} onClick={() => openEdit(m)}>
+                              Edit
+                            </Button>
+                            <button
+                              onClick={() => handleDelete(m)}
+                              className="p-2 rounded hover:bg-destructive/10 text-destructive"
+                              aria-label="Delete meeting"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+
+              {/* RSVPs modal */}
+              {rsvpMeeting && (
+                <Modal title={`RSVPs · ${rsvpMeeting.title}`} onClose={() => setRsvpMeeting(null)}>
+                  {(() => {
+                                      const list = rsvpsByMeeting[rsvpMeeting.id] ?? [];
+                                                          const memberName = (id: string) => members.find((m) => m.id === id)?.display_name ?? id;
+                                                          const counts = {
+                                                            attending: list.filter((r) => r.response === 'attending').length,
+                                                            not_attending: list.filter((r) => r.response === 'not_attending').length,
+                                                            maybe: list.filter((r) => r.response === 'maybe').length,
+                                                          };
+                                      return (
+                                        <div className="space-y-3">
+                                          <div className="flex gap-3 text-sm">
+                                            <span className="px-2 py-1 rounded bg-success/15 text-success font-semibold">Attending: {counts.attending}</span>
+                                            <span className="px-2 py-1 rounded bg-destructive/15 text-destructive font-semibold">Not attending: {counts.not_attending}</span>
+                                            <span className="px-2 py-1 rounded bg-gold-400/20 text-gold-700 font-semibold">Maybe: {counts.maybe}</span>
+                                          </div>
+                        {list.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">No RSVPs yet.</p>
+                        ) : (
+                          <ul className="space-y-1 text-sm">
+                            {list.map((r) => (
+                              <li key={r.id} className="flex items-center justify-between border-b last:border-0 py-1">
+                                <span>{memberName(r.member_id)}</span>
+                                <span className="text-xs uppercase font-semibold text-muted-foreground">{r.response}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </Modal>
+              )}
+
+              {/* Attendance modal */}
+              {attendanceMeeting && (
+                <Modal
+                  title={`Attendance · ${attendanceMeeting.title}`}
+                  onClose={() => setAttendanceMeeting(null)}
+                  wide
+                >
+                  {(() => {
+                    const list = attendanceByMeeting[attendanceMeeting.id] ?? [];
+                    const present = list.filter((a) => a.status === 'present').length;
+                    const absent = list.filter((a) => a.status === 'absent').length;
+                    const excused = list.filter((a) => a.status === 'excused').length;
+                                        return (
+                      <div className="space-y-3">
+                        <div className="flex gap-3 text-sm">
+                          <span className="px-2 py-1 rounded bg-success/15 text-success font-semibold">Present: {present}</span>
+                          <span className="px-2 py-1 rounded bg-destructive/15 text-destructive font-semibold">Absent: {absent}</span>
+                          <span className="px-2 py-1 rounded bg-gold-400/20 text-gold-700 font-semibold">Excused: {excused}</span>
+                        </div>
+                        <ul className="space-y-1 text-sm">
+                          {members.map((m) => {
+                            const att = list.find((a) => a.member_id === m.id);
+                            const status = att?.status ?? 'pending';
+                            return (
+                              <li key={m.id} className="flex items-center justify-between border-b last:border-0 py-1.5">
+                                <span>{m.display_name}</span>
+                                <select
+                                  value={status}
+                                  onChange={(e) => handleMarkAttendance(attendanceMeeting.id, m.id, e.target.value as MeetingAttendance['status'])}
+                                  className="text-xs rounded border-input bg-background px-2 py-1 border"
+                                >
+                                  <option value="pending">Pending</option>
+                                  <option value="present">Present</option>
+                                  <option value="absent">Absent</option>
+                                  <option value="excused">Excused</option>
+                                </select>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                        {members.length === 0 && (
+                          <p className="text-sm text-muted-foreground">No members loaded yet.</p>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </Modal>
+              )}
+
+              {/* Minutes modal */}
+              {minutesMeeting && (
+                <MinutesModal
+                  meeting={minutesMeeting}
+                  existing={minutesByMeeting[minutesMeeting.id] ?? null}
+                  onClose={() => setMinutesMeeting(null)}
+                  onSaved={(updated) => {
+                    setMinutesByMeeting((prev) => ({ ...prev, [minutesMeeting.id]: updated }));
+                  }}
+                />
+              )}
+            </Card>
+          );
+        };
+
+        const MinutesModal: React.FC<{
+          meeting: Meeting;
+          existing: MeetingMinutes | null;
+          onClose: () => void;
+          onSaved: (updated: MeetingMinutes) => void;
+        }> = ({ meeting, existing, onClose, onSaved }) => {
+          const [agenda, setAgenda] = useState(existing?.agenda ?? '');
+          const [discussions, setDiscussions] = useState(existing?.discussions ?? '');
+          const [decisions, setDecisions] = useState(existing?.decisions ?? '');
+          const [actionItemsJson, setActionItemsJson] = useState(
+            JSON.stringify(existing?.action_items ?? [], null, 2),
+          );
+          const [saving, setSaving] = useState(false);
+
+          const handleSave = async () => {
+            setSaving(true);
+            try {
+              let parsed: unknown = [];
+              try {
+                parsed = actionItemsJson.trim() ? JSON.parse(actionItemsJson) : [];
+              } catch {
+                toast.error('Action items must be valid JSON');
+                setSaving(false);
+                return;
+              }
+              const updated = await writeMeetingMinutes(
+                meeting.id,
+                agenda || null,
+                discussions || null,
+                decisions || null,
+                parsed,
+              );
+              onSaved(updated);
+              toast.success('Minutes saved');
+              onClose();
+            } catch (err: any) {
+              toast.error(err?.message ?? 'Failed to save minutes');
+            } finally {
+              setSaving(false);
+            }
+          };
+
+          return (
+            <Modal title={`Minutes · ${meeting.title}`} onClose={onClose} wide>
+              <div className="space-y-3">
+                <Textarea label="Agenda" rows={2} value={agenda} onChange={(e) => setAgenda(e.target.value)} />
+                <Textarea label="Discussions" rows={4} value={discussions} onChange={(e) => setDiscussions(e.target.value)} />
+                <Textarea label="Decisions" rows={3} value={decisions} onChange={(e) => setDecisions(e.target.value)} />
+                <div>
+                  <label className="block text-sm font-medium mb-1.5">Action items (JSON array)</label>
+                  <Textarea
+                    rows={5}
+                    value={actionItemsJson}
+                    onChange={(e) => setActionItemsJson(e.target.value)}
+                    placeholder={`e.g. [{"task": "Buy chairs", "owner": "Alice", "due": "2026-09-01"}]`}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Stored as jsonb. Keep it as a JSON array of objects with <code>task</code>, optional <code>owner</code> and <code>due</code>.
+                  </p>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={onClose}>Cancel</Button>
+                  <Button onClick={handleSave} isLoading={saving}>Save minutes</Button>
+                </div>
+              </div>
+            </Modal>
+          );
+        };
+
+        // ============================================================
+        // v5 — POLLS TAB
+        // ============================================================
+        const PollsTab: React.FC<{
+          polls: Poll[];
+          setPolls: (p: any) => void;
+          optionsByPoll: Record<string, PollOption[]>;
+          setOptionsByPoll: (p: any) => void;
+        }> = ({ polls, setPolls, optionsByPoll, setOptionsByPoll }) => {
+          const [showForm, setShowForm] = useState(false);
+          const blankForm = {
+            title: '', description: '', type: 'single_choice' as PollType,
+            closes_at: '',
+            options: ['', ''],
+          };
+          const [form, setForm] = useState(blankForm);
+          const [resultsPoll, setResultsPoll] = useState<Poll | null>(null);
+          const [resultsData, setResultsData] = useState<{ option: PollOption; votes: number }[]>([]);
+
+          const openNew = () => {
+            setForm(blankForm);
+            setShowForm(true);
+          };
+
+          const handleSave = async (e: React.FormEvent) => {
+            e.preventDefault();
+            try {
+              const cleanedOptions = form.options.map((o) => o.trim()).filter(Boolean);
+              const created = await createPoll({
+                title: form.title,
+                description: form.description || null,
+                type: form.type,
+                closes_at: new Date(form.closes_at).toISOString(),
+                options: cleanedOptions,
+              });
+              setPolls((prev: Poll[]) => [created, ...prev]);
+              // Load options for the new poll.
+              try {
+                const opts = await getPollOptions(created.id);
+                setOptionsByPoll((prev: Record<string, PollOption[]>) => ({ ...prev, [created.id]: opts }));
+              } catch {
+                // ignore
+              }
+              toast.success('Poll created');
+              setShowForm(false);
+            } catch (err: any) {
+              toast.error(err?.message ?? 'Failed to create poll');
+            }
+          };
+
+          const handleClose = async (poll: Poll) => {
+            if (!confirm(`Close poll "${poll.title}"? Members will no longer be able to vote.`)) return;
+            try {
+              const updated = await closePoll(poll.id);
+              setPolls((prev: Poll[]) => prev.map((x) => (x.id === updated.id ? updated : x)));
+              toast.success('Poll closed');
+            } catch (err: any) {
+              toast.error(err?.message ?? 'Failed to close poll');
+            }
+          };
+
+          const handleDelete = async (poll: Poll) => {
+            if (!confirm(`Delete poll "${poll.title}"? This cannot be undone.`)) return;
+            try {
+              await deletePoll(poll.id);
+              setPolls((prev: Poll[]) => prev.filter((x) => x.id !== poll.id));
+              setOptionsByPoll((prev: Record<string, PollOption[]>) => {
+                const copy = { ...prev };
+                delete copy[poll.id];
+                return copy;
+              });
+              toast.success('Poll deleted');
+            } catch (err: any) {
+              toast.error(err?.message ?? 'Failed to delete poll');
+            }
+          };
+
+          const loadResults = async (poll: Poll) => {
+            setResultsPoll(poll);
+            try {
+              const results = await getPollResults(poll.id);
+              setResultsData(results);
+            } catch (err: any) {
+              toast.error(err?.message ?? 'Failed to load results');
+            }
+          };
+
+          return (
+            <Card>
+              <CardHeader className="flex flex-row justify-between items-center flex-wrap gap-3">
+                <CardTitle className="flex items-center gap-2">
+                  <Vote className="w-5 h-5 text-primary" /> Polls ({polls.length})
+                </CardTitle>
+                <Button size="sm" leftIcon={<Plus className="w-4 h-4" />} onClick={openNew}>
+                  Create Poll
+                </Button>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {showForm && (
+                  <form onSubmit={handleSave} className="space-y-3 border-b pb-4 mb-4">
+                    <Input
+                      label="Title *"
+                      required
+                      value={form.title}
+                      onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+                    />
+                    <Textarea
+                      label="Description"
+                      rows={2}
+                      value={form.description}
+                      onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                    />
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium mb-1.5">Poll type</label>
+                        <select
+                          value={form.type}
+                          onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as PollType }))}
+                          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                        >
+                          <option value="single_choice">Single choice</option>
+                          <option value="multiple_choice">Multiple choice</option>
+                          <option value="yes_no">Yes / No</option>
+                        </select>
+                      </div>
+                      <Input
+                        label="Closes at *"
+                        type="datetime-local"
+                        required
+                        value={form.closes_at}
+                        onChange={(e) => setForm((f) => ({ ...f, closes_at: e.target.value }))}
+                      />
+                    </div>
+                    {form.type !== 'yes_no' && (
+                      <div>
+                        <label className="block text-sm font-medium mb-1.5">Options</label>
+                        <div className="space-y-2">
+                          {form.options.map((opt, idx) => (
+                            <div key={idx} className="flex gap-2">
+                              <Input
+                                value={opt}
+                                onChange={(e) => {
+                                  const next = [...form.options];
+                                  next[idx] = e.target.value;
+                                  setForm((f) => ({ ...f, options: next }));
+                                }}
+                                placeholder={`Option ${idx + 1}`}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (form.options.length <= 2) return;
+                                  setForm((f) => ({ ...f, options: f.options.filter((_, i) => i !== idx) }));
+                                }}
+                                className="p-2 rounded hover:bg-destructive/10 text-destructive"
+                                aria-label="Remove option"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="mt-2"
+                          leftIcon={<Plus className="w-3 h-3" />}
+                          onClick={() => setForm((f) => ({ ...f, options: [...f.options, ''] }))}
+                        >
+                          Add option
+                        </Button>
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <Button type="submit">Create</Button>
+                      <Button type="button" variant="outline" onClick={() => setShowForm(false)}>Cancel</Button>
+                    </div>
+                  </form>
+                )}
+
+                {polls.length === 0 && !showForm ? (
+                  <div className="text-center py-12">
+                    <Vote className="w-12 h-12 text-muted-foreground mx-auto mb-2" />
+                    <p className="text-sm text-muted-foreground mb-3">No polls yet.</p>
+                    <Button size="sm" leftIcon={<Plus className="w-4 h-4" />} onClick={openNew}>
+                      Create your first poll
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {polls.map((poll) => {
+                      const opts = optionsByPoll[poll.id] ?? [];
+                      const isOpen = poll.status === 'open' && new Date(poll.closes_at).getTime() >= Date.now();
+                      return (
+                        <div key={poll.id} className="rounded-lg border p-3">
+                          <div className="flex items-start justify-between gap-3 flex-wrap">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h4 className="font-bold">{poll.title}</h4>
+                                <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full ${
+                                  isOpen ? 'bg-success/15 text-success' : 'bg-muted text-muted-foreground'
+                                }`}>
+                                  {isOpen ? 'Open' : 'Closed'}
+                                </span>
+                                <span className="text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full border">
+                                  {poll.type.replace('_', ' ')}
+                                </span>
+                              </div>
+                              {poll.description && <p className="text-sm text-muted-foreground line-clamp-2">{poll.description}</p>}
+                              <p className="text-xs mt-1">
+                                Closes {new Date(poll.closes_at).toLocaleString()} · {opts.length} option(s)
+                              </p>
+                            </div>
+                            <div className="flex gap-1.5 flex-shrink-0 flex-wrap">
+                              <Button variant="ghost" size="sm" leftIcon={<BarChart3 className="w-3 h-3" />} onClick={() => loadResults(poll)}>
+                                Results
+                              </Button>
+                              {poll.status === 'open' && (
+                                <Button variant="outline" size="sm" leftIcon={<XCircle className="w-3 h-3" />} onClick={() => handleClose(poll)}>
+                                  Close
+                                </Button>
+                              )}
+                              <button
+                                onClick={() => handleDelete(poll)}
+                                className="p-2 rounded hover:bg-destructive/10 text-destructive"
+                                aria-label="Delete poll"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+
+              {resultsPoll && (
+                <Modal title={`Results · ${resultsPoll.title}`} onClose={() => setResultsPoll(null)}>
+                  {resultsData.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No options / votes yet.</p>
+                  ) : (() => {
+                    const max = Math.max(1, ...resultsData.map((r) => r.votes));
+                    return (
+                      <div className="space-y-2">
+                        {resultsData.map(({ option, votes }) => (
+                          <div key={option.id} className="space-y-1">
+                            <div className="flex justify-between text-sm">
+                              <span className="font-medium">{option.label}</span>
+                              <span className="text-muted-foreground">{votes} vote(s)</span>
+                            </div>
+                            <div className="w-full h-2 rounded-full bg-muted overflow-hidden">
+                              <div
+                                className="h-full bg-primary transition-all"
+                                style={{ width: `${(votes / max) * 100}%` }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </Modal>
+              )}
+            </Card>
+          );
+        };
+
+        // ============================================================
+        // v5 — FINANCIAL TAB
+        // ============================================================
+        const FinancialTab: React.FC<{
+          expenses: Expense[];
+          setExpenses: (p: any) => void;
+          reports: FinancialReport[];
+          setReports: (p: any) => void;
+          donations: Donation[];
+        }> = ({ expenses, setExpenses, reports, setReports, donations }) => {
+          const [showExpense, setShowExpense] = useState(false);
+          const [expenseForm, setExpenseForm] = useState({
+            title: '', amount: 0, category: 'other' as ExpenseCategory,
+                        description: '', vendor: '', receipt_url: '', currency: 'KES', expense_date: new Date().toISOString().slice(0, 10),
+                      });
+          const [showReport, setShowReport] = useState(false);
+          const [reportForm, setReportForm] = useState({
+            period_start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+            period_end: new Date().toISOString().slice(0, 10),
+            notes: '',
+          });
+
+          const handleCreateExpense = async (e: React.FormEvent) => {
+            e.preventDefault();
+            try {
+              const created = await createExpense({
+                              title: expenseForm.title,
+                              amount: Number(expenseForm.amount),
+                              category: expenseForm.category,
+                              description: expenseForm.description || null,
+                              vendor: expenseForm.vendor || null,
+                              receipt_url: expenseForm.receipt_url || null,
+                              currency: expenseForm.currency,
+                              expense_date: expenseForm.expense_date,
+                            });
+              setExpenses((prev: Expense[]) => [created, ...prev]);
+              toast.success('Expense recorded');
+              setShowExpense(false);
+              setExpenseForm({
+                title: '', amount: 0, category: 'other', description: '',
+                                vendor: '', receipt_url: '', currency: 'KES', expense_date: new Date().toISOString().slice(0, 10),
+                              });
+            } catch (err: any) {
+              toast.error(err?.message ?? 'Failed to record expense');
+            }
+          };
+
+          const handleApproveExpense = async (e: Expense) => {
+            if (!confirm(`Approve expense "${e.title}"?`)) return;
+            try {
+              const updated = await approveExpense(e.id);
+              setExpenses((prev: Expense[]) => prev.map((x) => (x.id === updated.id ? updated : x)));
+              toast.success('Expense approved');
+            } catch (err: any) {
+              toast.error(err?.message ?? 'Failed to approve');
+            }
+          };
+
+          const handleDeleteExpense = async (e: Expense) => {
+            if (!confirm(`Delete expense "${e.title}"?`)) return;
+            try {
+              await deleteExpense(e.id);
+              setExpenses((prev: Expense[]) => prev.filter((x) => x.id !== e.id));
+              toast.success('Expense deleted');
+            } catch (err: any) {
+              toast.error(err?.message ?? 'Failed to delete');
+            }
+          };
+
+          const handleGenerateReport = async (e: React.FormEvent) => {
+            e.preventDefault();
+            try {
+              const created = await submitFinancialReport(
+                reportForm.period_start,
+                reportForm.period_end,
+                reportForm.notes || undefined,
+              );
+              setReports((prev: FinancialReport[]) => [created, ...prev]);
+              toast.success('Report generated');
+              setShowReport(false);
+            } catch (err: any) {
+              toast.error(err?.message ?? 'Failed to generate report');
+            }
+          };
+
+          const handleApproveReport = async (r: FinancialReport) => {
+            if (!confirm(`Approve financial report for ${r.period_start} → ${r.period_end}?`)) return;
+            try {
+              const updated = await approveFinancialReport(r.id);
+              setReports((prev: FinancialReport[]) => prev.map((x) => (x.id === updated.id ? updated : x)));
+              toast.success('Report approved');
+            } catch (err: any) {
+              toast.error(err?.message ?? 'Failed to approve report');
+            }
+          };
+
+          // Pre-compute some live stats.
+          const totalDonations = donations.filter((d) => d.status === 'completed').reduce((s, d) => s + Number(d.amount ?? 0), 0);
+          const totalExpenses = expenses.reduce((s, e) => s + Number(e.amount ?? 0), 0);
+
+          return (
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <Card>
+                  <CardContent className="p-5">
+                    <DollarSign className="w-7 h-7 text-success mb-2" />
+                    <div className="text-2xl font-bold">KES {totalDonations.toLocaleString()}</div>
+                    <div className="text-xs text-muted-foreground">Total completed contributions</div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-5">
+                    <Banknote className="w-7 h-7 text-destructive mb-2" />
+                    <div className="text-2xl font-bold">KES {totalExpenses.toLocaleString()}</div>
+                    <div className="text-xs text-muted-foreground">Total expenses (all time)</div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-5">
+                    <BarChart3 className="w-7 h-7 text-primary mb-2" />
+                    <div className="text-2xl font-bold">KES {(totalDonations - totalExpenses).toLocaleString()}</div>
+                    <div className="text-xs text-muted-foreground">Net balance (running)</div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              <Card>
+                <CardHeader className="flex flex-row justify-between items-center flex-wrap gap-3">
+                  <CardTitle className="flex items-center gap-2">
+                    <Banknote className="w-5 h-5 text-primary" /> Expenses ({expenses.length})
+                  </CardTitle>
+                  <Button size="sm" leftIcon={<Plus className="w-4 h-4" />} onClick={() => setShowExpense(!showExpense)}>
+                    {showExpense ? 'Cancel' : 'Add Expense'}
+                  </Button>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {showExpense && (
+                    <form onSubmit={handleCreateExpense} className="space-y-3 border-b pb-4 mb-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <Input
+                          label="Title *"
+                          required
+                          value={expenseForm.title}
+                          onChange={(e) => setExpenseForm((f) => ({ ...f, title: e.target.value }))}
+                        />
+                        <Input
+                          label="Amount (KES) *"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          required
+                          value={expenseForm.amount}
+                          onChange={(e) => setExpenseForm((f) => ({ ...f, amount: Number(e.target.value) }))}
+                        />
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-sm font-medium mb-1.5">Category</label>
+                          <select
+                            value={expenseForm.category}
+                            onChange={(e) => setExpenseForm((f) => ({ ...f, category: e.target.value as ExpenseCategory }))}
+                            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                          >
+                            <option value="operations">Operations</option>
+                            <option value="events">Events</option>
+                            <option value="charity">Charity</option>
+                            <option value="utilities">Utilities</option>
+                            <option value="salaries">Salaries</option>
+                            <option value="supplies">Supplies</option>
+                            <option value="maintenance">Maintenance</option>
+                            <option value="other">Other</option>
+                          </select>
+                        </div>
+                        <Input
+                          label="Expense date *"
+                          type="date"
+                          required
+                          value={expenseForm.expense_date}
+                          onChange={(e) => setExpenseForm((f) => ({ ...f, expense_date: e.target.value }))}
+                        />
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <Input
+                          label="Vendor"
+                          value={expenseForm.vendor}
+                          onChange={(e) => setExpenseForm((f) => ({ ...f, vendor: e.target.value }))}
+                        />
+                        <Input
+                          label="Receipt URL"
+                          value={expenseForm.receipt_url}
+                          onChange={(e) => setExpenseForm((f) => ({ ...f, receipt_url: e.target.value }))}
+                          placeholder="https://..."
+                        />
+                      </div>
+                      <Textarea
+                        label="Description"
+                        rows={2}
+                        value={expenseForm.description}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, description: e.target.value }))}
+                      />
+                      <Button type="submit">Record</Button>
+                    </form>
+                  )}
+
+                  {expenses.length === 0 ? (
+                    <div className="text-center py-12">
+                      <Banknote className="w-12 h-12 text-muted-foreground mx-auto mb-2" />
+                      <p className="text-sm text-muted-foreground">No expenses recorded yet.</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="border-b">
+                          <tr className="text-left">
+                            <th className="py-2 font-semibold">Title</th>
+                            <th className="py-2 font-semibold">Category</th>
+                            <th className="py-2 font-semibold">Amount</th>
+                            <th className="py-2 font-semibold hidden sm:table-cell">Date</th>
+                            <th className="py-2 font-semibold">Approval</th>
+                            <th className="py-2 font-semibold text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {expenses.map((e) => (
+                            <tr key={e.id} className="border-b last:border-0">
+                              <td className="py-3">
+                                <div className="font-medium">{e.title}</div>
+                                {e.vendor && <div className="text-xs text-muted-foreground">{e.vendor}</div>}
+                              </td>
+                              <td className="py-3 capitalize">{e.category}</td>
+                              <td className="py-3 font-semibold">KES {Number(e.amount).toLocaleString()}</td>
+                              <td className="py-3 hidden sm:table-cell text-xs text-muted-foreground">
+                                {new Date(e.expense_date).toLocaleDateString()}
+                              </td>
+                              <td className="py-3">
+                                {e.approved_at ? (
+                                  <span className="text-xs px-2 py-0.5 rounded-full bg-success/15 text-success font-semibold">
+                                    Approved
+                                  </span>
+                                ) : (
+                                  <span className="text-xs px-2 py-0.5 rounded-full bg-gold-400/20 text-gold-700 font-semibold">
+                                    Pending
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 text-right">
+                                <div className="flex gap-1.5 justify-end">
+                                  {!e.approved_at && (
+                                    <Button size="sm" variant="outline" leftIcon={<CheckCircle className="w-3 h-3" />} onClick={() => handleApproveExpense(e)}>
+                                      Approve
+                                    </Button>
+                                  )}
+                                  <button
+                                    onClick={() => handleDeleteExpense(e)}
+                                    className="p-2 rounded hover:bg-destructive/10 text-destructive"
+                                    aria-label="Delete expense"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row justify-between items-center flex-wrap gap-3">
+                  <CardTitle className="flex items-center gap-2">
+                    <FileText className="w-5 h-5 text-primary" /> Financial Reports ({reports.length})
+                  </CardTitle>
+                  <Button size="sm" leftIcon={<Plus className="w-4 h-4" />} onClick={() => setShowReport(!showReport)}>
+                    {showReport ? 'Cancel' : 'Generate Report'}
+                  </Button>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {showReport && (
+                    <form onSubmit={handleGenerateReport} className="space-y-3 border-b pb-4 mb-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <Input
+                          label="Period start *"
+                          type="date"
+                          required
+                          value={reportForm.period_start}
+                          onChange={(e) => setReportForm((f) => ({ ...f, period_start: e.target.value }))}
+                        />
+                        <Input
+                          label="Period end *"
+                          type="date"
+                          required
+                          value={reportForm.period_end}
+                          onChange={(e) => setReportForm((f) => ({ ...f, period_end: e.target.value }))}
+                        />
+                      </div>
+                      <Textarea
+                        label="Notes"
+                        rows={2}
+                        value={reportForm.notes}
+                        onChange={(e) => setReportForm((f) => ({ ...f, notes: e.target.value }))}
+                      />
+                      <Button type="submit">Generate</Button>
+                    </form>
+                  )}
+
+                  {reports.length === 0 ? (
+                    <div className="text-center py-12">
+                      <FileText className="w-12 h-12 text-muted-foreground mx-auto mb-2" />
+                      <p className="text-sm text-muted-foreground">No financial reports yet.</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="border-b">
+                          <tr className="text-left">
+                            <th className="py-2 font-semibold">Period</th>
+                            <th className="py-2 font-semibold hidden md:table-cell">Opening</th>
+                            <th className="py-2 font-semibold">Income</th>
+                            <th className="py-2 font-semibold">Expenses</th>
+                            <th className="py-2 font-semibold hidden md:table-cell">Closing</th>
+                            <th className="py-2 font-semibold">Status</th>
+                            <th className="py-2 font-semibold text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {reports.map((r) => (
+                            <tr key={r.id} className="border-b last:border-0">
+                              <td className="py-3">
+                                <div className="font-medium">
+                                  {new Date(r.period_start).toLocaleDateString()} → {new Date(r.period_end).toLocaleDateString()}
+                                </div>
+                                {r.notes && <div className="text-xs text-muted-foreground line-clamp-1">{r.notes}</div>}
+                              </td>
+                              <td className="py-3 hidden md:table-cell">KES {Number(r.opening_balance ?? 0).toLocaleString()}</td>
+                              <td className="py-3 text-success font-semibold">KES {Number(r.total_income ?? 0).toLocaleString()}</td>
+                              <td className="py-3 text-destructive font-semibold">KES {Number(r.total_expenses ?? 0).toLocaleString()}</td>
+                              <td className="py-3 hidden md:table-cell font-semibold">KES {Number(r.closing_balance ?? 0).toLocaleString()}</td>
+                              <td className="py-3">
+                                <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+                                  r.status === 'approved' ? 'bg-success/15 text-success' :
+                                  r.status === 'submitted' ? 'bg-gold-400/20 text-gold-700' :
+                                  'bg-muted text-muted-foreground'
+                                }`}>
+                                  {r.status}
+                                </span>
+                              </td>
+                              <td className="py-3 text-right">
+                                {r.status === 'submitted' ? (
+                                  <Button size="sm" variant="outline" leftIcon={<CheckCircle className="w-3 h-3" />} onClick={() => handleApproveReport(r)}>
+                                    Approve
+                                  </Button>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">
+                                    {r.approved_at ? `Approved ${new Date(r.approved_at).toLocaleDateString()}` : '—'}
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          );
+        };
+
+        // ============================================================
+        // SHARED MODAL
+        // ============================================================
+        const Modal: React.FC<{
+          title: string;
+          onClose: () => void;
+          children: React.ReactNode;
+          wide?: boolean;
+        }> = ({ title, onClose, children, wide }) => (
+          <div
+            className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={onClose}
+          >
+            <div
+              className={`bg-card rounded-lg ${wide ? 'max-w-3xl' : 'max-w-md'} w-full my-8`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between p-5 border-b">
+                <h3 className="font-heading text-lg font-bold">{title}</h3>
+                <button onClick={onClose} className="p-1 rounded hover:bg-muted" aria-label="Close">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-5 max-h-[70vh] overflow-y-auto">{children}</div>
+            </div>
+          </div>
+        );
