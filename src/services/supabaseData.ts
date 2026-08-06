@@ -89,6 +89,22 @@ export async function deleteNews(id: string): Promise<void> {
   if (error) throw error;
 }
 
+export async function updateNews(id: string, patch: Partial<News>): Promise<News> {
+  const { data, error } = await supabase
+    .from('news')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data as News;
+}
+
+export async function toggleNewsPublished(id: string, published: boolean): Promise<void> {
+  const { error } = await supabase.from('news').update({ published }).eq('id', id);
+  if (error) throw error;
+}
+
 // =====================================================================
 // EVENTS
 // =====================================================================
@@ -112,6 +128,17 @@ export async function addEvent(input: Omit<Event, 'id' | 'created_at' | 'updated
 export async function deleteEvent(id: string): Promise<void> {
   const { error } = await supabase.from('events').delete().eq('id', id);
   if (error) throw error;
+}
+
+export async function updateEvent(id: string, patch: Partial<Event>): Promise<Event> {
+  const { data, error } = await supabase
+    .from('events')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data as Event;
 }
 
 // =====================================================================
@@ -343,4 +370,22 @@ export async function uploadGalleryFile(file: File, pathPrefix = 'images'): Prom
   if (uploadErr) throw uploadErr;
   const { data } = supabase.storage.from('gallery').getPublicUrl(path);
   return data.publicUrl;
+}
+
+/** Extract the storage object path from a public URL. Returns null if the URL
+ *  is not a Supabase Storage public URL for the gallery bucket. */
+export function galleryPathFromUrl(publicUrl: string | null | undefined): string | null {
+  if (!publicUrl) return null;
+  const marker = '/storage/v1/object/public/gallery/';
+  const idx = publicUrl.indexOf(marker);
+  if (idx < 0) return null;
+  return publicUrl.slice(idx + marker.length);
+}
+
+/** Delete a file from the gallery bucket. Silently no-ops if the URL isn't
+ *  a gallery URL or the file is already gone. */
+export async function deleteGalleryFile(publicUrl: string | null | undefined): Promise<void> {
+  const path = galleryPathFromUrl(publicUrl);
+  if (!path) return;
+  await supabase.storage.from('gallery').remove([path]);
 }

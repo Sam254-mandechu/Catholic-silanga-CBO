@@ -95,6 +95,7 @@ export interface Event {
   location: string;
   category: string;
   registration_link: string | null;
+  published: boolean;
   created_by: string | null;
   created_at: string;
   updated_at: string;
