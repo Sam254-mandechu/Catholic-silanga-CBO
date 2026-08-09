@@ -16,6 +16,7 @@ import { TermsPage } from './pages/TermsPage';
 import { MeetingsPage } from './pages/MeetingsPage';
 import { SecretaryPortal } from './pages/SecretaryPortal';
 import { TreasurerPortal } from './pages/TreasurerPortal';
+import { ModeratorPortal } from './pages/ModeratorPortal';
 import { RegisterPage } from './pages/auth/RegisterPage';
 import { LoginPage } from './pages/auth/LoginPage';
 import { ForgotPasswordPage } from './pages/auth/ForgotPasswordPage';
@@ -93,6 +94,16 @@ function App() {
                   <RequireAuth>
                     <RequireRole allow={['treasurer']}>
                       <TreasurerPortal />
+                    </RequireRole>
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/moderator-portal"
+                element={
+                  <RequireAuth>
+                    <RequireRole allow={['moderator']}>
+                      <ModeratorPortal />
                     </RequireRole>
                   </RequireAuth>
                 }

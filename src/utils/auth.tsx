@@ -105,8 +105,9 @@ export function defaultDashboardFor(profile: { role: string } | null | undefined
   if (fallbackPath) return fallbackPath;
   const role = profile?.role;
   if (role === 'admin') return '/admin-dashboard';
-  if (role === 'secretary') return '/secretary-portal';
+    if (role === 'secretary') return '/secretary-portal';
   if (role === 'treasurer') return '/treasurer-portal';
+  if (role === 'moderator') return '/moderator-portal';
   return '/member-dashboard';
 }
 

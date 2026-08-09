@@ -60,7 +60,9 @@ export const Navbar: React.FC = () => {
       ? '/secretary-portal'
       : profile?.role === 'treasurer'
         ? '/treasurer-portal'
-        : '/member-dashboard';
+        : profile?.role === 'moderator'
+          ? '/moderator-portal'
+          : '/member-dashboard';
 
   return (
     <header

@@ -25,9 +25,11 @@ import {
   getPolls, getPollOptions, createPoll, closePoll, deletePoll,
   getPollResults,
 } from '../services/supabaseData';
+import { listApprovedMembersByHierarchy } from '../services/supabaseAuth';
 import type {
   Meeting, MeetingRsvp, MeetingAttendance, MeetingMinutes, MeetingStatus,
   Poll, PollOption, PollType,
+  Profile,
 } from '../types/database';
 
 type Tab =
@@ -68,6 +70,7 @@ export const SecretaryPortal: React.FC = () => {
   const [minutes, setMinutes] = useState<Record<string, MeetingMinutes | null>>({});
   const [polls, setPolls] = useState<Poll[]>([]);
   const [pollOptions, setPollOptions] = useState<Record<string, PollOption[]>>({});
+  const [members, setMembers] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -114,6 +117,14 @@ export const SecretaryPortal: React.FC = () => {
         );
         if (!mounted) return;
         setPollOptions(optsMap);
+
+        // Fetch all active members for the attendance picker
+        try {
+          const allMembers = await listApprovedMembersByHierarchy();
+          if (mounted) setMembers(allMembers);
+        } catch (err) {
+          console.warn('Failed to load members for attendance picker', err);
+        }
       } catch (err) {
         console.warn('Secretary data load failed', err);
       } finally {
@@ -267,6 +278,7 @@ export const SecretaryPortal: React.FC = () => {
                 meetings={meetings}
                 attendance={attendance}
                 setAttendance={setAttendance}
+                members={members}
               />
             )}
             {tab === 'minutes' && (
@@ -636,7 +648,8 @@ const AttendanceTab: React.FC<{
   meetings: Meeting[];
   attendance: Record<string, MeetingAttendance[]>;
   setAttendance: (m: Record<string, MeetingAttendance[]>) => void;
-}> = ({ meetings, attendance, setAttendance }) => {
+  members: Profile[];
+}> = ({ meetings, attendance, setAttendance, members }) => {
   const [selected, setSelected] = useState<Meeting | null>(null);
   const [memberInput, setMemberInput] = useState('');
   const [statusInput, setStatusInput] = useState<'present' | 'absent' | 'excused'>('present');
@@ -670,6 +683,13 @@ const AttendanceTab: React.FC<{
   }
 
   const list = selected ? (attendance[selected.id] ?? []) : [];
+  const memberById = useMemo(() => {
+    const m = new Map<string, Profile>();
+    members.forEach((p) => m.set(p.id, p));
+    return m;
+  }, [members]);
+  const recordedIds = new Set(list.map((a) => a.member_id));
+  const unmarked = members.filter((p) => !recordedIds.has(p.id));
 
   return (
     <Card>
@@ -704,13 +724,30 @@ const AttendanceTab: React.FC<{
         {selected && (
           <Modal title={`Attendance · ${selected.title}`} onClose={() => setSelected(null)} wide>
             <div className="space-y-4">
+              {/* Member picker + status dropdown */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <Input
-                  label="Member ID (uuid)"
-                  value={memberInput}
-                  onChange={(e) => setMemberInput(e.target.value)}
-                  placeholder="paste member uuid"
-                />
+                <div className="sm:col-span-2">
+                  <label className="block text-sm font-medium mb-1.5">Member</label>
+                  <select
+                    value={memberInput}
+                    onChange={(e) => setMemberInput(e.target.value)}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  >
+                    <option value="">— select a member —</option>
+                    {members.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.display_name}
+                        {p.hierarchy_role ? ` (${p.hierarchy_role})` : ''}
+                        {recordedIds.has(p.id) ? ' · recorded' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {members.length === 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      No active members loaded — check that members have status='active'.
+                    </p>
+                  )}
+                </div>
                 <div>
                   <label className="block text-sm font-medium mb-1.5">Status</label>
                   <select
@@ -723,31 +760,94 @@ const AttendanceTab: React.FC<{
                     <option value="excused">Excused</option>
                   </select>
                 </div>
-                <div className="flex items-end">
-                  <Button onClick={() => memberInput && markOne(memberInput, statusInput)}>
-                    Mark
+                <div className="sm:col-span-3 flex justify-end">
+                  <Button
+                    disabled={!memberInput}
+                    onClick={() => memberInput && markOne(memberInput, statusInput)}
+                  >
+                    Mark attendance
                   </Button>
                 </div>
               </div>
 
-              {list.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No attendance recorded yet.</p>
-              ) : (
-                <div className="space-y-1">
-                  {list.map((a) => (
-                    <div key={a.id} className="flex items-center justify-between border-b last:border-0 py-2">
-                      <p className="text-sm font-medium">Member: {a.member_id.slice(0, 8)}…</p>
-                      <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full ${
-                        a.status === 'present' ? 'bg-success/15 text-success' :
-                        a.status === 'absent' ? 'bg-destructive/15 text-destructive' :
-                        'bg-gold-400/20 text-gold-700'
-                      }`}>
-                        {a.status}
-                      </span>
-                    </div>
-                  ))}
+              {/* Quick-mark list for anyone not yet recorded */}
+              {unmarked.length > 0 && (
+                <div className="border-t pt-3">
+                  <p className="text-xs uppercase tracking-wider text-muted-foreground font-semibold mb-2">
+                    Quick mark · {unmarked.length} member{unmarked.length === 1 ? '' : 's'} not yet recorded
+                  </p>
+                  <div className="space-y-1 max-h-60 overflow-y-auto">
+                    {unmarked.map((p) => (
+                      <div key={p.id} className="flex items-center justify-between border-b last:border-0 py-2">
+                        <div>
+                          <p className="text-sm font-medium">{p.display_name}</p>
+                          {p.hierarchy_role && (
+                            <p className="text-xs text-muted-foreground">{p.hierarchy_role}</p>
+                          )}
+                        </div>
+                        <div className="flex gap-1">
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            onClick={() => markOne(p.id, 'present')}
+                          >
+                            P
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => markOne(p.id, 'absent')}
+                          >
+                            A
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="gold"
+                            onClick={() => markOne(p.id, 'excused')}
+                          >
+                            E
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
+
+              {/* Recorded list */}
+              <div className="border-t pt-3">
+                <p className="text-xs uppercase tracking-wider text-muted-foreground font-semibold mb-2">
+                  Recorded ({list.length})
+                </p>
+                {list.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No attendance recorded yet.</p>
+                ) : (
+                  <div className="space-y-1">
+                    {list.map((a) => {
+                      const m = memberById.get(a.member_id);
+                      return (
+                        <div key={a.id} className="flex items-center justify-between border-b last:border-0 py-2">
+                          <div>
+                            <p className="text-sm font-medium">
+                              {m?.display_name ?? `Member: ${a.member_id.slice(0, 8)}…`}
+                            </p>
+                            {m?.hierarchy_role && (
+                              <p className="text-xs text-muted-foreground">{m.hierarchy_role}</p>
+                            )}
+                          </div>
+                          <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full ${
+                            a.status === 'present' ? 'bg-success/15 text-success' :
+                            a.status === 'absent' ? 'bg-destructive/15 text-destructive' :
+                            'bg-gold-400/20 text-gold-700'
+                          }`}>
+                            {a.status}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </Modal>
         )}

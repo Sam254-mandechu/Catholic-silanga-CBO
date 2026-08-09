@@ -448,6 +448,67 @@ export async function autoPromoteIfAdminEmail(email: string, currentProfile?: Pr
   return data as Profile;
 }
 
+/**
+ * Moderator / admin: approve a pending member, optionally setting their
+ * hierarchy_role. Calls the SECURITY DEFINER RPC `approve_member`.
+ * Falls back to direct UPDATE if the RPC isn't installed (e.g. before v8).
+ */
+export async function approveMember(
+  target_user_id: string,
+  hierarchy_role: HierarchyRole | null = null,
+): Promise<Profile> {
+  try {
+    const { data, error } = await supabase.rpc('approve_member', {
+      target_user_id,
+      p_hierarchy_role: hierarchy_role,
+    });
+    if (!error && data) return data as Profile;
+    if (error && !/does not exist/i.test(error.message)) throw toAppError(error);
+  } catch (err: any) {
+    if (!/does not exist/i.test(err?.message ?? '')) throw err;
+  }
+  // Fallback: direct update via admin_update_member
+  const { data, error } = await supabase.rpc('admin_update_member', {
+    target_user_id,
+    patch: {
+      status: 'active',
+      ...(hierarchy_role ? { hierarchy_role } : {}),
+    },
+  });
+  if (error) throw toAppError(error);
+  return data as Profile;
+}
+
+/**
+ * Moderator / admin: suspend a member.
+ * Calls the SECURITY DEFINER RPC `suspend_member`.
+ * Falls back to direct UPDATE if the RPC isn't installed.
+ */
+export async function suspendMember(
+  target_user_id: string,
+  reason: string | null = null,
+): Promise<Profile> {
+  try {
+    const { data, error } = await supabase.rpc('suspend_member', {
+      target_user_id,
+      p_reason: reason,
+    });
+    if (!error && data) return data as Profile;
+    if (error && !/does not exist/i.test(error.message)) throw toAppError(error);
+  } catch (err: any) {
+    if (!/does not exist/i.test(err?.message ?? '')) throw err;
+  }
+  // Fallback: direct update
+  const { data, error } = await supabase
+    .from('profiles')
+    .update({ status: 'suspended', updated_at: new Date().toISOString() })
+    .eq('id', target_user_id)
+    .select('*')
+    .single();
+  if (error) throw toAppError(error);
+  return data as Profile;
+}
+
 // ---------- Helpers ----------
 
 function toAppError(err: any): AuthError {

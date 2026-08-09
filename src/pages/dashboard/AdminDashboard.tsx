@@ -651,14 +651,17 @@ const MembersTab: React.FC<{
   };
 
   const handleSystemRoleChange = async (id: string, role: Role) => {
-    try {
-      await adminSetSystemRole(id, role);
-      setMembers((prev: Profile[]) => prev.map((m) => (m.id === id ? { ...m, role } : m)));
-      toast.success(`System role set to ${SYSTEM_ROLE_LABELS[role]}`);
-    } catch (err: any) {
-      toast.error(err?.message || 'Failed to update system role');
-    }
-  };
+      try {
+        const updated = await adminSetSystemRole(id, role);
+        setMembers((prev: Profile[]) => prev.map((m) => (m.id === id ? { ...m, ...updated } : m)));
+        const msg = ['treasurer', 'secretary', 'moderator', 'admin'].includes(role)
+          ? `${SYSTEM_ROLE_LABELS[role]} assigned — account auto-activated`
+          : `System role set to ${SYSTEM_ROLE_LABELS[role]}`;
+        toast.success(msg);
+      } catch (err: any) {
+        toast.error(err?.message || 'Failed to update system role');
+      }
+    };
 
   const handleDelete = async (m: Profile) => {
     const confirmed = window.confirm(
@@ -675,6 +678,7 @@ const MembersTab: React.FC<{
   };
 
   return (
+
     <Card>
       <CardHeader>
         <CardTitle>All Members ({members.length})</CardTitle>
@@ -725,8 +729,10 @@ const MembersTab: React.FC<{
                     <select
                       value={m.role}
                       onChange={(e) => handleSystemRoleChange(m.id, e.target.value as Role)}
-                      disabled={m.status !== 'active'}
-                      className="text-xs rounded border-input bg-background px-2 py-1 border disabled:opacity-50"
+                      title={m.status !== 'active'
+                        ? 'Granting treasurer/secretary/moderator auto-activates the account'
+                        : undefined}
+                      className="text-xs rounded border-input bg-background px-2 py-1 border"
                     >
                       {SYSTEM_ROLES.map((r) => (
                         <option key={r} value={r}>{SYSTEM_ROLE_LABELS[r]}</option>
