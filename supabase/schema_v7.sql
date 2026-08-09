@@ -245,7 +245,7 @@ begin
     address        = case when patch ? 'address'        then patch->>'address'        else p.address end,
     bio            = case when patch ? 'bio'            then patch->>'bio'            else p.bio end,
     photo_url      = case when patch ? 'photo_url'      then patch->>'photo_url'      else p.photo_url end,
-    hierarchy_role = case when patch ? 'hierarchy_role' then (patch->>'hierarchy_role')::public.hierarchy_role_enum else p.hierarchy_role end,
+    hierarchy_role = case when patch ? 'hierarchy_role' then (patch->>'hierarchy_role')::text else p.hierarchy_role end,
     role           = case when patch ? 'role'           then (patch->>'role')::text   else p.role end,
     updated_at     = now()
   where p.id = target_user_id
