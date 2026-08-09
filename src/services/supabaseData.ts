@@ -18,6 +18,10 @@ import type {
   MeetingRsvp,
   MeetingAttendance,
   MeetingMinutes,
+  // v10 — proceedings / minutes workflow
+  MeetingProceedings,
+  ActionItem,
+  AttendanceRollEntry,
   Poll,
   PollOption,
   PollVote,
@@ -25,11 +29,15 @@ import type {
   Expense,
   FinancialReport,
   // v6 — site content
-      SiteContentKey,
-    // v7 — notifications
-    NotificationRow,
-    NotificationKind,
-    } from '../types/database';
+  SiteContentKey,
+  // v7 — notifications
+  NotificationRow,
+  NotificationKind,
+
+  Fine,
+  FineStats,
+  ExpenseCategory,
+} from '../types/database';
 
 // =====================================================================
 // PROJECTS
@@ -671,6 +679,8 @@ export async function getMeetingMinutes(meeting_id: string): Promise<MeetingMinu
     .eq('meeting_id', meeting_id)
     .maybeSingle();
   if (error) throw error;
+  // v10: unpublished minutes are private — only the author/admin should call
+  // this directly. Public callers should use getMeetingProceedings() instead.
   return data as MeetingMinutes | null;
 }
 
@@ -700,12 +710,87 @@ export async function writeMeetingMinutes(
     .eq('meeting_id', meeting_id)
     .maybeSingle();
   if (fetchErr) throw fetchErr;
-  if (!data) throw new Error('Minutes were not recorded');
-  return data as MeetingMinutes;
-}
+    if (!data) throw new Error('Minutes were not recorded');
+    return data as MeetingMinutes;
+  }
 
-// =====================================================================
-// POLLS — v5
+  /**
+   * v10 — Save minutes as a DRAFT. Idempotent: if no row exists, creates one
+   * with status='draft'. If a draft exists, updates it. If a published row
+   * exists, this refuses (only admin can amend published minutes — use
+   * publishMeetingMinutes for that).
+   */
+  export async function saveMinutesDraft(
+    meeting_id: string,
+    agenda: string | null,
+    discussions: string | null,
+    decisions: string | null,
+    action_items: ActionItem[] = [],
+  ): Promise<MeetingMinutes> {
+    const { data, error } = await supabase.rpc('save_meeting_minutes_draft', {
+      p_meeting_id: meeting_id,
+      p_agenda: agenda ?? '',
+      p_discussions: discussions ?? '',
+      p_decisions: decisions ?? '',
+      p_action_items: action_items,
+    });
+    if (error) throw error;
+    return data as MeetingMinutes;
+  }
+
+  /**
+   * v10 — Publish minutes. Idempotent. Sets status='published',
+   * published_at=now(), published_by=current_user. Once published, only
+   * admins can call this again (to amend).
+   */
+  export async function publishMeetingMinutes(
+    meeting_id: string,
+    agenda: string | null,
+    discussions: string | null,
+    decisions: string | null,
+    action_items: ActionItem[] = [],
+  ): Promise<MeetingMinutes> {
+    const { data, error } = await supabase.rpc('publish_meeting_minutes', {
+      p_meeting_id: meeting_id,
+      p_agenda: agenda ?? '',
+      p_discussions: discussions ?? '',
+      p_decisions: decisions ?? '',
+      p_action_items: action_items,
+    });
+    if (error) throw error;
+    return data as MeetingMinutes;
+  }
+
+  /**
+   * v10 — Public-facing proceedings fetch. Returns null if minutes are not
+   * yet published (so the proceedings page can 404 cleanly).
+   */
+  export async function getMeetingProceedings(meeting_id: string): Promise<MeetingProceedings | null> {
+    const { data, error } = await supabase.rpc('get_meeting_minutes_full', {
+      p_meeting_id: meeting_id,
+    });
+    if (error) throw error;
+    if (!data || (Array.isArray(data) && data.length === 0)) return null;
+    const row = Array.isArray(data) ? data[0] : data;
+    return {
+      meeting_id: row.meeting_id,
+      title: row.title,
+      description: row.description,
+      scheduled_at: row.scheduled_at,
+      location: row.location,
+      meeting_type: row.meeting_type,
+      agenda: row.agenda,
+      discussions: row.discussions,
+      decisions: row.decisions,
+      action_items: Array.isArray(row.action_items) ? (row.action_items as ActionItem[]) : [],
+      published_at: row.published_at,
+      published_by_name: row.published_by_name,
+      attendance_roll: Array.isArray(row.attendance_roll) ? (row.attendance_roll as AttendanceRollEntry[]) : [],
+    };
+  }
+
+  // =====================================================================
+  // POLLS — v5
 //   Schema:
 //     polls         (id, title, description, type, status, closes_at, created_by, created_at)
 //     poll_options  (id, poll_id, label, display_order)
@@ -1283,4 +1368,170 @@ export async function markNotificationsRead(ids: string[]): Promise<number> {
     .in('id', ids);
   if (error) throw error;
   return ids.length;
+}
+
+
+// =====================================================================
+// v9 — FINES + TREASURER MANUAL ENTRY
+// =====================================================================
+
+
+/** Get all fines. For treasurer/admin/moderator dashboards. */
+export async function getFines(opts?: { memberId?: string; status?: 'unpaid' | 'paid' | 'waived' }): Promise<Fine[]> {
+  try {
+    const { data, error } = await supabase.rpc('list_fines', {
+      p_member_id: opts?.memberId ?? null,
+      p_status: opts?.status ?? null,
+    });
+    if (!error && data) return (data ?? []) as Fine[];
+    if (error && !/does not exist/i.test(error.message)) throw error;
+  } catch (err: any) {
+    if (!/does not exist/i.test(err?.message ?? '')) throw err;
+  }
+  // Fallback: direct query
+  let q = supabase.from('fines').select('*').order('created_at', { ascending: false });
+  if (opts?.memberId) q = q.eq('member_id', opts.memberId);
+  if (opts?.status) q = q.eq('status', opts.status);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data ?? []) as Fine[];
+}
+
+/** Record a fine (treasurer/admin/moderator). */
+export async function recordFine(input: {
+  member_id: string;
+  amount: number;
+  reason: string;
+  due_date?: string | null;
+  notes?: string | null;
+}): Promise<Fine> {
+  const { data, error } = await supabase.rpc('record_fine', {
+    p_member_id: input.member_id,
+    p_amount: input.amount,
+    p_reason: input.reason,
+    p_due_date: input.due_date ?? null,
+    p_notes: input.notes ?? null,
+  });
+  if (error) throw error;
+  return data as Fine;
+}
+
+/** Mark a fine as paid. */
+export async function markFinePaid(fine_id: string): Promise<Fine> {
+  const { data, error } = await supabase.rpc('mark_fine_paid', { p_fine_id: fine_id });
+  if (error) throw error;
+  return data as Fine;
+}
+
+/** Waive a fine (cancel without payment). */
+export async function waiveFine(fine_id: string, reason?: string): Promise<Fine> {
+  const { data, error } = await supabase.rpc('waive_fine', {
+    p_fine_id: fine_id,
+    p_reason: reason ?? null,
+  });
+  if (error) throw error;
+  return data as Fine;
+}
+
+/** Get aggregate fine stats for finance page. */
+export async function getFineStats(): Promise<FineStats> {
+  try {
+    const { data, error } = await supabase.from('fine_stats').select('*').maybeSingle();
+    if (!error && data) return data as FineStats;
+  } catch {
+    // fall through to direct sum
+  }
+  // Fallback: direct aggregation
+  const { data: fines, error } = await supabase.from('fines').select('amount, status');
+  if (error) throw error;
+  const stats: FineStats = {
+    total_collected: 0, total_outstanding: 0, total_waived: 0,
+    unpaid_count: 0, paid_count: 0, waived_count: 0,
+  };
+  (fines ?? []).forEach((f: any) => {
+    if (f.status === 'paid') { stats.total_collected += Number(f.amount); stats.paid_count += 1; }
+    else if (f.status === 'unpaid') { stats.total_outstanding += Number(f.amount); stats.unpaid_count += 1; }
+    else if (f.status === 'waived') { stats.total_waived += Number(f.amount); stats.waived_count += 1; }
+  });
+  return stats;
+}
+
+/** Treasurer: manually record a donation (cash, M-Pesa, etc.). */
+export async function treasurerRecordDonation(input: {
+  donor_name: string;
+  email: string;
+  amount: number;
+  currency?: string;
+  purpose?: string;
+  message?: string | null;
+  method_id?: string | null;
+  reference_code?: string | null;
+  donor_id?: string | null;
+  created_at?: string | null;
+}): Promise<Donation> {
+  const { data, error } = await supabase.rpc('treasurer_record_donation', {
+    p_donor_name: input.donor_name,
+    p_email: input.email,
+    p_amount: input.amount,
+    p_currency: input.currency ?? 'KES',
+    p_purpose: input.purpose ?? 'General donation',
+    p_message: input.message ?? null,
+    p_method_id: input.method_id ?? null,
+    p_reference_code: input.reference_code ?? null,
+    p_donor_id: input.donor_id ?? null,
+    p_created_at: input.created_at ?? null,
+  });
+  if (error) throw error;
+  return data as Donation;
+}
+
+/** Treasurer: edit a donation (locked 1hr after verification). */
+export async function treasurerEditDonation(
+  donation_id: string,
+  patch: Record<string, unknown>,
+): Promise<Donation> {
+  const { data, error } = await supabase.rpc('treasurer_edit_donation', {
+    p_donation_id: donation_id,
+    p_patch: patch,
+  });
+  if (error) throw error;
+  return data as Donation;
+}
+
+/** Treasurer: manually record an expense. */
+export async function treasurerRecordExpense(input: {
+  title: string;
+  amount: number;
+  category: ExpenseCategory | string;
+  currency?: string;
+  description?: string | null;
+  vendor?: string | null;
+  receipt_url?: string | null;
+  expense_date?: string;
+}): Promise<Expense> {
+  const { data, error } = await supabase.rpc('treasurer_record_expense', {
+    p_title: input.title,
+    p_amount: input.amount,
+    p_category: input.category,
+    p_currency: input.currency ?? 'KES',
+    p_description: input.description ?? null,
+    p_vendor: input.vendor ?? null,
+    p_receipt_url: input.receipt_url ?? null,
+    p_expense_date: input.expense_date ?? null,
+  });
+  if (error) throw error;
+  return data as Expense;
+}
+
+/** Treasurer: edit an expense (locked after admin approval). */
+export async function treasurerEditExpense(
+  expense_id: string,
+  patch: Record<string, unknown>,
+): Promise<Expense> {
+  const { data, error } = await supabase.rpc('treasurer_edit_expense', {
+    p_expense_id: expense_id,
+    p_patch: patch,
+  });
+  if (error) throw error;
+  return data as Expense;
 }

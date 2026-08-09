@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   CalendarDays, Clock, MapPin, FileText,
@@ -30,6 +31,7 @@ function fmtDateTime(iso: string): string {
 }
 
 export const MeetingsPage: React.FC = () => {
+  const navigate = useNavigate();
   const { profile, user } = useAuth();
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [rsvps, setRsvps] = useState<Record<string, MeetingRsvp[]>>({});
@@ -37,7 +39,6 @@ export const MeetingsPage: React.FC = () => {
   const [attendance, setAttendance] = useState<Record<string, MeetingAttendance[]>>({});
   const [myRsvps, setMyRsvps] = useState<Record<string, MeetingRsvp>>({});
   const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<Meeting | null>(null);
   const [rsvpModal, setRsvpModal] = useState<Meeting | null>(null);
   const [rsvpResponse, setRsvpResponse] = useState<RsvpResponse>('attending');
   const [rsvpReason, setRsvpReason] = useState('');
@@ -238,15 +239,20 @@ export const MeetingsPage: React.FC = () => {
                                   {myR ? 'Update RSVP' : 'RSVP'}
                                 </Button>
                               )}
-                              {(minutes[m.id] || att.length > 0) && (
+                              {tab === 'past' && minutes[m.id]?.status === 'published' && (
                                 <Button
                                   size="sm"
-                                  variant="outline"
-                                  onClick={() => setSelected(m)}
+                                  variant="primary"
+                                  onClick={() => navigate(`/meetings/${m.id}/proceedings`)}
                                   leftIcon={<FileText className="w-3 h-3" />}
                                 >
-                                  Details
+                                  View proceedings
                                 </Button>
+                              )}
+                              {tab === 'past' && (!minutes[m.id] || minutes[m.id]?.status !== 'published') && (
+                                <span className="text-xs text-muted-foreground inline-flex items-center px-2 py-0.5 rounded-full bg-muted">
+                                  Minutes pending
+                                </span>
                               )}
                             </div>
                           </CardContent>
@@ -260,62 +266,6 @@ export const MeetingsPage: React.FC = () => {
           )}
         </div>
       </section>
-
-      {/* Meeting detail modal (minutes + attendance) */}
-      {selected && (
-        <Modal title={selected.title} onClose={() => setSelected(null)} wide>
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              {fmtDateTime(selected.scheduled_at)} • {selected.location}
-            </p>
-            {minutes[selected.id] ? (
-              <div className="space-y-3">
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground">Agenda</p>
-                  <p className="text-sm whitespace-pre-line">{minutes[selected.id]!.agenda || '—'}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground">Discussions</p>
-                  <p className="text-sm whitespace-pre-line">{minutes[selected.id]!.discussions || '—'}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground">Decisions</p>
-                  <p className="text-sm whitespace-pre-line">{minutes[selected.id]!.decisions || '—'}</p>
-                </div>
-                {(Array.isArray(minutes[selected.id]!.action_items) && (minutes[selected.id]!.action_items as unknown[]).length > 0) && (
-                  <div>
-                    <p className="text-xs font-semibold text-muted-foreground">Action items</p>
-                    <pre className="text-xs bg-muted p-2 rounded overflow-x-auto">
-                      {JSON.stringify(minutes[selected.id]!.action_items, null, 2)}
-                    </pre>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                No minutes published yet for this meeting.
-              </p>
-            )}
-
-            {attendance[selected.id] && attendance[selected.id].length > 0 && (
-              <div>
-                <p className="text-xs font-semibold text-muted-foreground mb-2">Attendance</p>
-                <div className="grid grid-cols-3 gap-2 text-sm">
-                  <span className="px-2 py-1 rounded bg-success/15 text-success font-semibold text-center">
-                    Present: {attendance[selected.id].filter((a) => a.status === 'present').length}
-                  </span>
-                  <span className="px-2 py-1 rounded bg-destructive/15 text-destructive font-semibold text-center">
-                    Absent: {attendance[selected.id].filter((a) => a.status === 'absent').length}
-                  </span>
-                  <span className="px-2 py-1 rounded bg-gold-400/20 text-gold-700 font-semibold text-center">
-                    Excused: {attendance[selected.id].filter((a) => a.status === 'excused').length}
-                  </span>
-                </div>
-              </div>
-            )}
-          </div>
-        </Modal>
-      )}
 
       {/* RSVP modal */}
       {rsvpModal && (

@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 import {
   CalendarDays, ClipboardList, Vote, FileText, BarChart3, LogOut,
   Plus, X, Eye, Trash2, Save, XCircle, Clock, ListChecks,
-  CheckCheck,
+  CheckCheck, Users, Search, Send,
 } from 'lucide-react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip,
@@ -21,20 +21,21 @@ import { toast } from '../utils/toast';
 import {
   getMeetings, createMeeting, updateMeeting, deleteMeeting,
   getMeetingRsvps, markMeetingAttendance, getMeetingAttendance,
-  getMeetingMinutes, writeMeetingMinutes,
+  getMeetingMinutes,
+  saveMinutesDraft, publishMeetingMinutes,
   getPolls, getPollOptions, createPoll, closePoll, deletePoll,
   getPollResults,
 } from '../services/supabaseData';
 import { listApprovedMembersByHierarchy } from '../services/supabaseAuth';
 import type {
   Meeting, MeetingRsvp, MeetingAttendance, MeetingMinutes, MeetingStatus,
-  Poll, PollOption, PollType,
+  Poll, PollOption, PollType, MinutesStatus, ActionItem,
   Profile,
 } from '../types/database';
 
 type Tab =
   | 'overview' | 'meetings' | 'rsvps' | 'attendance'
-  | 'minutes' | 'polls';
+  | 'minutes' | 'polls' | 'members';
 
 // ---------- Helpers ----------
 const PIE_COLORS = ['#a82524', '#f59e0b', '#15803d', '#6366f1', '#db2777', '#0891b2'];
@@ -172,6 +173,7 @@ export const SecretaryPortal: React.FC = () => {
     { id: 'attendance', label: 'Attendance', icon: CheckCheck },
     { id: 'minutes', label: 'Minutes', icon: FileText },
     { id: 'polls', label: 'Polls', icon: Vote },
+    { id: 'members', label: 'Members', icon: Users },
   ];
 
   return (
@@ -286,6 +288,8 @@ export const SecretaryPortal: React.FC = () => {
                 meetings={meetings}
                 minutes={minutes}
                 setMinutes={setMinutes}
+                attendance={attendance}
+                members={members}
               />
             )}
             {tab === 'polls' && (
@@ -296,6 +300,7 @@ export const SecretaryPortal: React.FC = () => {
                 setPollOptions={setPollOptions}
               />
             )}
+            {tab === 'members' && <MembersTab members={members} />}
           </main>
         </div>
       </div>
@@ -863,10 +868,14 @@ const MinutesTab: React.FC<{
   meetings: Meeting[];
   minutes: Record<string, MeetingMinutes | null>;
   setMinutes: (m: Record<string, MeetingMinutes | null>) => void;
-}> = ({ meetings, minutes, setMinutes }) => {
+  attendance: Record<string, MeetingAttendance[]>;
+  members: Profile[];
+}> = ({ meetings, minutes, setMinutes, attendance, members }) => {
   const [editing, setEditing] = useState<Meeting | null>(null);
   const [form, setForm] = useState({ agenda: '', discussions: '', decisions: '', action_items: '' });
   const [saving, setSaving] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [confirmPublish, setConfirmPublish] = useState(false);
 
   const openEdit = (m: Meeting) => {
     const existing = minutes[m.id];
@@ -879,19 +888,27 @@ const MinutesTab: React.FC<{
     });
   };
 
-  const handleSave = async () => {
-    if (!editing) return;
-    let actionItems: unknown[] = [];
+  const parseActionItems = (): ActionItem[] | null => {
     try {
       const parsed = JSON.parse(form.action_items || '[]');
-      actionItems = Array.isArray(parsed) ? parsed : [];
+      if (!Array.isArray(parsed)) {
+        toast.error('Action items must be a JSON array');
+        return null;
+      }
+      return parsed as ActionItem[];
     } catch {
-      toast.error('Action items must be a valid JSON array');
-      return;
+      toast.error('Action items must be valid JSON');
+      return null;
     }
+  };
+
+  const handleSaveDraft = async () => {
+    if (!editing) return;
+    const actionItems = parseActionItems();
+    if (!actionItems) return;
     setSaving(true);
     try {
-      const saved = await writeMeetingMinutes(
+      const saved = await saveMinutesDraft(
         editing.id,
         form.agenda,
         form.discussions,
@@ -899,12 +916,35 @@ const MinutesTab: React.FC<{
         actionItems,
       );
       setMinutes({ ...minutes, [editing.id]: saved });
-      toast.success('Minutes saved');
-      setEditing(null);
+      toast.success('Draft saved');
     } catch (err: any) {
-      toast.error(err?.message ?? 'Failed to save');
+      toast.error(err?.message ?? 'Failed to save draft');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handlePublish = async () => {
+    if (!editing) return;
+    const actionItems = parseActionItems();
+    if (!actionItems) return;
+    setPublishing(true);
+    try {
+      const saved = await publishMeetingMinutes(
+        editing.id,
+        form.agenda,
+        form.discussions,
+        form.decisions,
+        actionItems,
+      );
+      setMinutes({ ...minutes, [editing.id]: saved });
+      toast.success('Minutes published — visible at /meetings');
+      setConfirmPublish(false);
+      setEditing(null);
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Failed to publish');
+    } finally {
+      setPublishing(false);
     }
   };
 
@@ -919,39 +959,87 @@ const MinutesTab: React.FC<{
     );
   }
 
+  // Sort meetings so newest-first
+  const sortedMeetings = [...meetings].sort(
+    (a, b) => new Date(b.scheduled_at).getTime() - new Date(a.scheduled_at).getTime(),
+  );
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>Meeting Minutes</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
-        {meetings.map((m) => {
+        {sortedMeetings.map((m) => {
           const existing = minutes[m.id];
+          const status: MinutesStatus | 'none' = existing?.status ?? 'none';
+          const attList = attendance[m.id] ?? [];
+          const presentCount = attList.filter((a) => a.status === 'present').length;
           return (
             <div key={m.id} className="rounded-lg border p-3">
               <div className="flex items-start justify-between gap-2 flex-wrap">
-                <div>
+                <div className="min-w-0">
                   <p className="font-bold">{m.title}</p>
-                  <p className="text-xs text-muted-foreground">{fmtDateTime(m.scheduled_at)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {fmtDateTime(m.scheduled_at)} • {m.location}
+                  </p>
+                  <div className="flex gap-2 mt-1 text-xs flex-wrap">
+                    {status === 'published' ? (
+                      <span className="px-2 py-0.5 rounded-full bg-success/15 text-success font-semibold">
+                        Published
+                      </span>
+                    ) : status === 'draft' ? (
+                      <span className="px-2 py-0.5 rounded-full bg-gold-400/20 text-gold-700 font-semibold">
+                        Draft
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-semibold">
+                        No minutes yet
+                      </span>
+                    )}
+                    {attList.length > 0 && (
+                      <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary font-semibold">
+                        {presentCount}/{attList.length} present
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <Button size="sm" variant="outline" leftIcon={<FileText className="w-3 h-3" />}
-                  onClick={() => openEdit(m)}>
-                  {existing ? 'Edit minutes' : 'Write minutes'}
-                </Button>
+                <div className="flex gap-2 flex-shrink-0">
+                  {status === 'published' && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => window.open(`/meetings/${m.id}/proceedings`, '_blank')}
+                      leftIcon={<Eye className="w-3 h-3" />}
+                    >
+                      View proceedings
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    leftIcon={<FileText className="w-3 h-3" />}
+                    onClick={() => openEdit(m)}
+                  >
+                    {status === 'published' ? 'Amend' : status === 'draft' ? 'Edit draft' : 'Write minutes'}
+                  </Button>
+                </div>
               </div>
               {existing && (
                 <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
                   <div>
                     <p className="text-xs font-semibold text-muted-foreground">Agenda</p>
-                    <p className="line-clamp-3 whitespace-pre-line">{existing.agenda}</p>
+                    <p className="line-clamp-3 whitespace-pre-line">{existing.agenda ?? '—'}</p>
                   </div>
                   <div>
                     <p className="text-xs font-semibold text-muted-foreground">Decisions</p>
-                    <p className="line-clamp-3 whitespace-pre-line">{existing.decisions}</p>
+                    <p className="line-clamp-3 whitespace-pre-line">{existing.decisions ?? '—'}</p>
                   </div>
                   <div>
                     <p className="text-xs font-semibold text-muted-foreground">Action items</p>
-                    <p className="text-xs">{Array.isArray(existing.action_items) ? existing.action_items.length : 0} items</p>
+                    <p className="text-xs">
+                      {Array.isArray(existing.action_items) ? existing.action_items.length : 0} items
+                    </p>
                   </div>
                 </div>
               )}
@@ -961,8 +1049,56 @@ const MinutesTab: React.FC<{
       </CardContent>
 
       {editing && (
-        <Modal title={`Minutes · ${editing.title}`} onClose={() => setEditing(null)} wide>
+        <Modal title={`Minutes · ${editing.title}`} onClose={() => { setEditing(null); setConfirmPublish(false); }} wide>
           <div className="space-y-3">
+            {/* Attendance roll side-panel */}
+            {(() => {
+              const attList = attendance[editing.id] ?? [];
+              const memberById = new Map(members.map((p) => [p.id, p]));
+              const present = attList.filter((a) => a.status === 'present');
+              const excused = attList.filter((a) => a.status === 'excused');
+              const absent = attList.filter((a) => a.status === 'absent');
+              return (
+                <div className="rounded-lg border bg-muted/30 p-3">
+                  <p className="text-xs uppercase tracking-wider font-semibold text-muted-foreground mb-2">
+                    Attendance roll ({attList.length} of {members.length} recorded · {present.length} present)
+                  </p>
+                  {attList.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      No attendance recorded yet — go to the Attendance tab to mark who was there.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <p className="font-semibold text-success mb-1">Present ({present.length})</p>
+                        <ul className="space-y-0.5">
+                          {present.map((a) => (
+                            <li key={a.id}>{memberById.get(a.member_id)?.display_name ?? a.member_id.slice(0, 8)}</li>
+                          ))}
+                        </ul>
+                      </div>
+                      <div>
+                        <p className="font-semibold text-gold-700 mb-1">Excused ({excused.length})</p>
+                        <ul className="space-y-0.5">
+                          {excused.map((a) => (
+                            <li key={a.id}>{memberById.get(a.member_id)?.display_name ?? a.member_id.slice(0, 8)}</li>
+                          ))}
+                        </ul>
+                      </div>
+                      <div>
+                        <p className="font-semibold text-destructive mb-1">Absent ({absent.length})</p>
+                        <ul className="space-y-0.5">
+                          {absent.map((a) => (
+                            <li key={a.id}>{memberById.get(a.member_id)?.display_name ?? a.member_id.slice(0, 8)}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             <Textarea label="Agenda" rows={3} value={form.agenda}
               onChange={(e) => setForm((f) => ({ ...f, agenda: e.target.value }))} />
             <Textarea label="Discussions" rows={5} value={form.discussions}
@@ -970,7 +1106,9 @@ const MinutesTab: React.FC<{
             <Textarea label="Decisions" rows={4} value={form.decisions}
               onChange={(e) => setForm((f) => ({ ...f, decisions: e.target.value }))} />
             <div>
-              <label className="block text-sm font-medium mb-1.5">Action items (JSON array)</label>
+              <label className="block text-sm font-medium mb-1.5">
+                Action items (JSON array)
+              </label>
               <textarea
                 rows={6}
                 value={form.action_items}
@@ -978,12 +1116,186 @@ const MinutesTab: React.FC<{
                 className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
                 placeholder='[{"who": "John", "what": "Send report", "by": "2026-08-30"}]'
               />
+              <p className="text-xs text-muted-foreground mt-1">
+                Each item is an object: <code>{`{who, what, by}`}</code>. <code>by</code> is a date string.
+              </p>
             </div>
-            <div className="flex gap-2">
-              <Button onClick={handleSave} isLoading={saving} leftIcon={<Save className="w-4 h-4" />}>
-                Save minutes
-              </Button>
-              <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+
+            {!confirmPublish ? (
+              <div className="flex gap-2 flex-wrap justify-end pt-2 border-t">
+                <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+                <Button
+                  variant="secondary"
+                  onClick={handleSaveDraft}
+                  isLoading={saving}
+                  leftIcon={<Save className="w-4 h-4" />}
+                >
+                  Save draft
+                </Button>
+                <Button
+                  onClick={() => setConfirmPublish(true)}
+                  leftIcon={<Send className="w-4 h-4" />}
+                >
+                  Publish…
+                </Button>
+              </div>
+            ) : (
+              <div className="rounded-lg border-2 border-primary bg-primary/5 p-4 space-y-2">
+                <p className="font-semibold text-sm">Recheck before publishing</p>
+                <p className="text-xs text-muted-foreground">
+                  Publishing makes these minutes <strong>public</strong> at{' '}
+                  <code>/meetings/{editing.id}/proceedings</code>. Anyone visiting the site will be able
+                  to read the agenda, discussions, decisions, action items, and the attendance roll.
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Once published, only admins can amend them. You'll be credited as the publisher.
+                </p>
+                <div className="flex gap-2 justify-end">
+                  <Button variant="outline" onClick={() => setConfirmPublish(false)}>Back to editing</Button>
+                  <Button
+                    onClick={handlePublish}
+                    isLoading={publishing}
+                    leftIcon={<Send className="w-4 h-4" />}
+                  >
+                    Confirm and publish
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+    </Card>
+  );
+};
+
+// ============================================================
+// MEMBERS TAB
+// ============================================================
+const MembersTab: React.FC<{ members: Profile[] }> = ({ members }) => {
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState<Profile | null>(null);
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return members;
+    return members.filter((m) =>
+      [m.display_name, m.email, m.phone, m.hierarchy_role, m.bio]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q)),
+    );
+  }, [members, search]);
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <CardTitle className="flex items-center gap-2">
+          <Users className="w-5 h-5 text-primary" /> Members ({members.length})
+        </CardTitle>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by name, email, role…"
+            className="pl-9 pr-3 py-2 rounded-md border border-input bg-background text-sm w-full sm:w-72"
+          />
+        </div>
+      </CardHeader>
+      <CardContent>
+        {members.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-8">
+            No active members loaded.
+          </p>
+        ) : filtered.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-8">
+            No members match &ldquo;{search}&rdquo;.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {filtered.map((m) => (
+              <button
+                key={m.id}
+                onClick={() => setSelected(m)}
+                className="text-left rounded-lg border p-3 hover:shadow-md transition-shadow bg-card"
+              >
+                <p className="font-semibold">{m.display_name}</p>
+                {m.hierarchy_role && (
+                  <p className="text-xs text-primary mt-0.5">{m.hierarchy_role}</p>
+                )}
+                <p className="text-xs text-muted-foreground truncate mt-1">{m.email}</p>
+                {m.phone && (
+                  <p className="text-xs text-muted-foreground">{m.phone}</p>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </CardContent>
+
+      {selected && (
+        <Modal title={selected.display_name} onClose={() => setSelected(null)}>
+          <div className="space-y-3 text-sm">
+            {selected.photo_url && (
+              <img
+                src={selected.photo_url}
+                alt={selected.display_name}
+                className="w-24 h-24 rounded-full object-cover mx-auto"
+              />
+            )}
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground">Role</p>
+              <p>{selected.hierarchy_role ?? 'Member'}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground">Email</p>
+              <a href={`mailto:${selected.email}`} className="text-primary hover:underline">
+                {selected.email}
+              </a>
+            </div>
+            {selected.phone && (
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground">Phone</p>
+                <a href={`tel:${selected.phone.replace(/\s/g, '')}`} className="text-primary hover:underline">
+                  {selected.phone}
+                </a>
+              </div>
+            )}
+            {selected.address && (
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground">Address</p>
+                <p className="whitespace-pre-line">{selected.address}</p>
+              </div>
+            )}
+            {selected.bio && (
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground">Bio</p>
+                <p className="whitespace-pre-line">{selected.bio}</p>
+              </div>
+            )}
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground">Member since</p>
+              <p>{fmtDate(selected.joined_at)}</p>
+            </div>
+            <div className="pt-2 border-t flex gap-2 justify-end">
+              {selected.email && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  leftIcon={<Send className="w-3 h-3" />}
+                  onClick={() => window.location.href = `mailto:${selected.email}`}
+                >
+                  Email
+                </Button>
+              )}
+              {selected.phone && (
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={() => window.location.href = `tel:${selected.phone!.replace(/\s/g, '')}`}
+                >
+                  Call
+                </Button>
+              )}
             </div>
           </div>
         </Modal>

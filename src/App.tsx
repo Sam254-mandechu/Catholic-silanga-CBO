@@ -14,6 +14,7 @@ import { ContributionsPage } from './pages/ContributionsPage';
 import { FinanceOverviewPage } from './pages/FinanceOverviewPage';
 import { TermsPage } from './pages/TermsPage';
 import { MeetingsPage } from './pages/MeetingsPage';
+import { MeetingProceedingsPage } from './pages/MeetingProceedingsPage';
 import { SecretaryPortal } from './pages/SecretaryPortal';
 import { TreasurerPortal } from './pages/TreasurerPortal';
 import { ModeratorPortal } from './pages/ModeratorPortal';
@@ -52,6 +53,10 @@ function App() {
                     <MeetingsPage />
                   </RequireAuth>
                 }
+              />
+              <Route
+                path="/meetings/:id/proceedings"
+                element={<MeetingProceedingsPage />}
               />
 
               {/* Auth routes */}

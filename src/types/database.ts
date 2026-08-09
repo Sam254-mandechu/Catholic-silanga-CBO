@@ -220,6 +220,15 @@ export type MeetingType = 'general' | 'committee' | 'emergency' | 'agm';
 export type MeetingStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
 export type RsvpResponse = 'attending' | 'not_attending' | 'maybe';
 export type AttendanceStatus = 'present' | 'absent' | 'excused';
+export type MinutesStatus = 'draft' | 'published';
+
+/** Structured action-item shape stored in `meeting_minutes.action_items` jsonb. */
+export interface ActionItem {
+  who?: string;
+  what?: string;
+  by?: string;
+  [k: string]: unknown;
+}
 
 export interface Meeting {
   id: string;
@@ -262,6 +271,32 @@ export interface MeetingMinutes {
   action_items: unknown;
   published_by: string | null;
   published_at: string;
+  /** v10 — draft until explicitly published; only published is publicly visible. */
+  status: MinutesStatus;
+}
+
+/** Public-facing row returned by `get_meeting_minutes_full(meeting_id)`. */
+export interface MeetingProceedings {
+  meeting_id: string;
+  title: string;
+  description: string | null;
+  scheduled_at: string;
+  location: string | null;
+  meeting_type: string;
+  agenda: string | null;
+  discussions: string | null;
+  decisions: string | null;
+  action_items: ActionItem[];
+  published_at: string;
+  published_by_name: string | null;
+  attendance_roll: AttendanceRollEntry[];
+}
+
+export interface AttendanceRollEntry {
+  display_name: string;
+  hierarchy_role: string | null;
+  status: AttendanceStatus;
+  checked_in_at: string;
 }
 
 // =====================================================================
@@ -464,4 +499,32 @@ export interface NotificationRow {
   payload: Record<string, unknown> | null;
   read_at: string | null;
   created_at: string;
+}
+
+
+// ---------- v9: Fines ----------
+export type FineStatus = 'unpaid' | 'paid' | 'waived';
+
+export interface Fine {
+  id: string;
+  member_id: string;
+  amount: number;
+  currency: string;
+  reason: string;
+  status: FineStatus;
+  issued_by: string;
+  due_date: string | null;
+  paid_at: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FineStats {
+  total_collected: number;
+  total_outstanding: number;
+  total_waived: number;
+  unpaid_count: number;
+  paid_count: number;
+  waived_count: number;
 }
