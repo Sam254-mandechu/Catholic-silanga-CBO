@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Target, Eye, Heart, Cross } from 'lucide-react';
-import { getSiteContentMap } from '../../services/supabaseData';
+import { useSiteContentLive } from '../../hooks/useSiteContentLive';
 
 const DEFAULT_MISSION =
   'To deepen the Catholic faith of our members through worship, education, charity, and fellowship, while serving the broader Silanga community with the love of Christ.';
@@ -27,25 +26,11 @@ const values = [
 ];
 
 export const MissionVision: React.FC = () => {
-  const [mission, setMission] = useState(DEFAULT_MISSION);
-  const [vision, setVision] = useState(DEFAULT_VISION);
-
-  // Pull admin-editable mission + vision from site_content. Falls back to
-  // hardcoded defaults if the rows don't exist yet (the schema seeds them).
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const map = await getSiteContentMap(['mission', 'vision']);
-        if (!mounted) return;
-        if (map.mission) setMission(map.mission);
-        if (map.vision) setVision(map.vision);
-      } catch (err) {
-        console.warn('Failed to load mission/vision from site_content', err);
-      }
-    })();
-    return () => { mounted = false; };
-  }, []);
+  // Live subscription: edits in the admin Site Content tab appear instantly
+  // without a hard refresh.
+  const live = useSiteContentLive(['mission', 'vision']);
+  const mission = live.mission ?? DEFAULT_MISSION;
+  const vision = live.vision ?? DEFAULT_VISION;
 
   return (
     <section className="py-20 bg-gradient-to-b from-background to-primary/5">

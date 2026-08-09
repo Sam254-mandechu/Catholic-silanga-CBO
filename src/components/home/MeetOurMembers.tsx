@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { Mail, Phone, Award, ArrowRight } from 'lucide-react';
 import { Card, CardContent } from '../ui/Card';
 import { PageHeader } from '../common/PageHeader';
-import { listApprovedMembersByHierarchy } from '../../services/supabaseAuth';
+import { useProfilesLive } from '../../hooks/useProfilesLive';
 import { HIERARCHY_WEIGHT } from '../../services/supabaseData';
 import type { Profile } from '../../types/database';
 
@@ -12,35 +11,25 @@ const FALLBACK_AVATAR =
   'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=200&q=80';
 
 export const MeetOurMembers: React.FC<{ limit?: number }> = ({ limit = 8 }) => {
-  const [members, setMembers] = useState<Profile[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const list = await listApprovedMembersByHierarchy();
-        if (mounted) {
-          // De-duplicate (the helper may return multiple per hierarchy bucket)
-          // and trim to limit
-          const seen = new Set<string>();
-          const deduped = list.filter((m) => {
-            if (seen.has(m.id)) return false;
-            seen.add(m.id);
-            return true;
-          });
-          setMembers(deduped.slice(0, limit));
-        }
-      } catch (err) {
-        console.warn('MeetOurMembers: failed to load', err);
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, [limit]);
+  // Live subscription: only active members, ordered by hierarchy position.
+// Edits the admin makes (name, photo, hierarchy role) appear here in real time.
+const { profiles: allActive, loading } = useProfilesLive({
+  filter: (p) => p.status === 'active',
+});
+const members: Profile[] = (() => {
+  // Stable order by hierarchy weight
+  const sorted = [...allActive].sort(
+    (a, b) => (HIERARCHY_WEIGHT[a.hierarchy_role ?? 'Member'] ?? 99)
+           - (HIERARCHY_WEIGHT[b.hierarchy_role ?? 'Member'] ?? 99),
+  );
+  // De-dupe by id (defensive)
+  const seen = new Set<string>();
+  return sorted.filter((m) => {
+    if (seen.has(m.id)) return false;
+    seen.add(m.id);
+    return true;
+  }).slice(0, limit);
+})();
 
   if (loading) return null;
   if (members.length === 0) return null;

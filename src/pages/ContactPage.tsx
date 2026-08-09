@@ -1,11 +1,16 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Mail, Phone, MapPin, Send, Facebook as FbIcon, Twitter as TwIcon, Instagram as IgIcon, Youtube as YtIcon, CheckCircle } from 'lucide-react';
+import {
+  Mail, Phone, MapPin, Send,
+  Facebook as FbIcon, Twitter as TwIcon, Instagram as IgIcon, Youtube as YtIcon,
+  CheckCircle,
+} from 'lucide-react';
 import { PageHeader } from '../components/common/PageHeader';
 import { Card, CardContent } from '../components/ui/Card';
 import { Input, Textarea } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { submitContact } from '../services/supabaseData';
+import { useSiteContentLive } from '../hooks/useSiteContentLive';
 import { isValidEmail } from '../utils/helpers';
 
 interface ContactForm {
@@ -24,7 +29,47 @@ const initialForm: ContactForm = {
   message: '',
 };
 
+const DEFAULT_ADDRESS = 'Catholic Silanga Parish\nKisumu West, Kenya\nP.O. Box 1234-40100';
+const DEFAULT_PHONE = '+254 700 000 000';
+const DEFAULT_PHONE_2 = '+254 711 111 111';
+const DEFAULT_EMAIL = 'info@catholicsilanga.org';
+const DEFAULT_EMAIL_2 = 'chairperson@catholicsilanga.org';
+const DEFAULT_HOURS = 'Mon-Fri, 8AM-5PM';
+
 export const ContactPage: React.FC = () => {
+  // Live subscription — edits the admin makes to contact info appear instantly.
+  const live = useSiteContentLive([
+    'contact_address',
+    'contact_phone',
+    'contact_email',
+    'contact_hours',
+    'social_facebook',
+    'social_twitter',
+    'social_instagram',
+    'social_youtube',
+  ]);
+
+  const address = live.contact_address ?? DEFAULT_ADDRESS;
+  const phoneRaw = live.contact_phone ?? DEFAULT_PHONE;
+  // Optional second phone: split on '|' if admin provides "+254...|+254..."
+  const [phone1, phone2] = phoneRaw.split('|').map((s) => s.trim());
+  const phone1Final = phone1 || DEFAULT_PHONE;
+  const phone2Final = phone2 || DEFAULT_PHONE_2;
+
+  const emailRaw = live.contact_email ?? DEFAULT_EMAIL;
+  const [email1, email2] = emailRaw.split('|').map((s) => s.trim());
+  const email1Final = email1 || DEFAULT_EMAIL;
+  const email2Final = email2 || DEFAULT_EMAIL_2;
+
+  const hours = live.contact_hours ?? DEFAULT_HOURS;
+
+  const socials: Array<{ Icon: React.ComponentType<{ className?: string }>; href: string | undefined; label: string }> = [
+    { Icon: FbIcon, href: live.social_facebook, label: 'Facebook' },
+    { Icon: TwIcon, href: live.social_twitter, label: 'Twitter' },
+    { Icon: IgIcon, href: live.social_instagram, label: 'Instagram' },
+    { Icon: YtIcon, href: live.social_youtube, label: 'YouTube' },
+  ];
+
   const [form, setForm] = useState<ContactForm>(initialForm);
   const [errors, setErrors] = useState<Partial<Record<keyof ContactForm, string>>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -59,7 +104,6 @@ export const ContactPage: React.FC = () => {
       setTimeout(() => setSubmitted(false), 5000);
     } catch (err) {
       console.warn('Failed to submit contact form', err);
-      // Still show success UX to user — data is captured in console
       setSubmitted(true);
       setForm(initialForm);
       setTimeout(() => setSubmitted(false), 5000);
@@ -88,10 +132,8 @@ export const ContactPage: React.FC = () => {
                   </div>
                   <div>
                     <h3 className="font-semibold mb-1">Visit Us</h3>
-                    <p className="text-sm text-muted-foreground leading-relaxed">
-                      Catholic Silanga Parish<br />
-                      Kisumu West, Kenya<br />
-                      P.O. Box 1234-40100
+                    <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-line">
+                      {address}
                     </p>
                   </div>
                 </CardContent>
@@ -105,10 +147,14 @@ export const ContactPage: React.FC = () => {
                   <div>
                     <h3 className="font-semibold mb-1">Call Us</h3>
                     <p className="text-sm text-muted-foreground leading-relaxed">
-                      <a href="tel:+254700000000" className="hover:text-primary block">+254 700 000 000</a>
-                      <a href="tel:+254711111111" className="hover:text-primary block">+254 711 111 111</a>
+                      <a href={`tel:${phone1Final.replace(/\s/g, '')}`} className="hover:text-primary block">
+                        {phone1Final}
+                      </a>
+                      <a href={`tel:${phone2Final.replace(/\s/g, '')}`} className="hover:text-primary block">
+                        {phone2Final}
+                      </a>
                     </p>
-                    <p className="text-xs text-muted-foreground mt-1">Mon-Fri, 8AM-5PM</p>
+                    <p className="text-xs text-muted-foreground mt-1">{hours}</p>
                   </div>
                 </CardContent>
               </Card>
@@ -121,11 +167,11 @@ export const ContactPage: React.FC = () => {
                   <div>
                     <h3 className="font-semibold mb-1">Email Us</h3>
                     <p className="text-sm text-muted-foreground leading-relaxed">
-                      <a href="mailto:info@catholicsilanga.org" className="hover:text-primary block">
-                        info@catholicsilanga.org
+                      <a href={`mailto:${email1Final}`} className="hover:text-primary block">
+                        {email1Final}
                       </a>
-                      <a href="mailto:chairperson@catholicsilanga.org" className="hover:text-primary block">
-                        chairperson@catholicsilanga.org
+                      <a href={`mailto:${email2Final}`} className="hover:text-primary block">
+                        {email2Final}
                       </a>
                     </p>
                   </div>
@@ -136,14 +182,21 @@ export const ContactPage: React.FC = () => {
                 <CardContent>
                   <h3 className="font-semibold mb-3">Follow Us</h3>
                   <div className="flex gap-3">
-                    {[FbIcon, TwIcon, IgIcon, YtIcon].map((Icon, idx) => (
+                    {socials.map((s) => (
                       <a
-                        key={idx}
-                        href="#"
-                        className="w-10 h-10 rounded-lg bg-muted hover:bg-primary hover:text-primary-foreground flex items-center justify-center transition-colors"
-                        aria-label={`Social media link ${idx + 1}`}
+                        key={s.label}
+                        href={s.href || '#'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label={s.label}
+                        className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
+                          s.href
+                            ? 'bg-muted hover:bg-primary hover:text-primary-foreground'
+                            : 'bg-muted/50 text-muted-foreground/40 cursor-not-allowed'
+                        }`}
+                        onClick={(e) => { if (!s.href) e.preventDefault(); }}
                       >
-                        <Icon className="w-5 h-5" />
+                        <s.Icon className="w-5 h-5" />
                       </a>
                     ))}
                   </div>

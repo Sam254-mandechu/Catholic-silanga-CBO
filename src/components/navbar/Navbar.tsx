@@ -19,8 +19,9 @@ const navLinks = [
   { name: 'News & Events', path: '/news-events' },
   { name: 'Meetings', path: '/meetings', requiresAuth: true },
   { name: 'Contributions', path: '/contributions' },
-  { name: 'Contact', path: '/contact' },
-];
+    { name: 'Finance', path: '/finance' },
+    { name: 'Contact', path: '/contact' },
+  ];
 
 export const Navbar: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);

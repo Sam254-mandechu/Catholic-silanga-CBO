@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   Banknote, ClipboardList, Heart, BarChart3, LogOut,
-  Plus, Trash2, Save, CheckCircle, Eye, Receipt,
+  Plus, Trash2, Save, CheckCircle, XCircle, Eye, Receipt,
 } from 'lucide-react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip,
@@ -19,6 +19,7 @@ import { toast } from '../utils/toast';
 
 import {
   getRecentDonations,
+  adminVerifyDonation,
   getExpenses, createExpense, approveExpense, deleteExpense,
   getFinancialReports,
   submitFinancialReport, approveFinancialReport,
@@ -201,7 +202,7 @@ export const TreasurerPortal: React.FC = () => {
             )}
 
             {tab === 'donations' && (
-              <DonationsTab donations={donations} />
+              <DonationsTab donations={donations} setDonations={setDonations} />
             )}
             {tab === 'expenses' && (
               <ExpensesTab
@@ -250,63 +251,206 @@ const StatCard: React.FC<{
 );
 
 // ============================================================
-const DonationsTab: React.FC<{ donations: Donation[] }> = ({ donations }) => {
-  if (donations.length === 0) {
-    return (
-      <Card>
-        <CardContent className="p-10 text-center">
-          <Heart className="w-12 h-12 text-muted-foreground mx-auto mb-2" />
-          <p className="text-sm text-muted-foreground">No donations recorded yet.</p>
-        </CardContent>
-      </Card>
-    );
-  }
+const DonationsTab: React.FC<{
+  donations: Donation[];
+  setDonations: (d: Donation[]) => void;
+}> = ({ donations, setDonations }) => {
+  const [filter, setFilter] = useState<'pending' | 'completed' | 'failed' | 'all'>('pending');
+  const [acting, setActing] = useState<string | null>(null);
+  const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [rejectNote, setRejectNote] = useState('');
+
+  const filtered = useMemo(() => {
+    if (filter === 'all') return donations;
+    return donations.filter((d) => d.status === filter);
+  }, [donations, filter]);
+
+  const counts = useMemo(() => ({
+    pending: donations.filter((d) => d.status === 'pending').length,
+    completed: donations.filter((d) => d.status === 'completed').length,
+    failed: donations.filter((d) => d.status === 'failed').length,
+    all: donations.length,
+  }), [donations]);
+
+  const handleVerify = async (d: Donation) => {
+    setActing(d.id);
+    try {
+      const updated = await adminVerifyDonation(d.id, { status: 'completed' });
+      setDonations(donations.map((x) => (x.id === d.id ? updated : x)));
+      toast.success(`Verified ${d.donor_name} — ${fmtMoney(Number(d.amount))}`);
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Failed to verify contribution');
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const handleReject = async () => {
+    if (!rejectingId) return;
+    setActing(rejectingId);
+    try {
+      const updated = await adminVerifyDonation(rejectingId, {
+        status: 'failed',
+        admin_note: rejectNote || 'Rejected by treasurer',
+      });
+      setDonations(donations.map((x) => (x.id === rejectingId ? updated : x)));
+      toast.success('Contribution rejected');
+      setRejectingId(null);
+      setRejectNote('');
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Failed to reject contribution');
+    } finally {
+      setActing(null);
+    }
+  };
+
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>Donations ({donations.length})</CardTitle>
+      <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <CardTitle>Donations / Contributions</CardTitle>
+        <div className="flex gap-1 flex-wrap text-xs">
+          {([
+            { id: 'pending', label: `Pending (${counts.pending})` },
+            { id: 'completed', label: `Verified (${counts.completed})` },
+            { id: 'failed', label: `Rejected (${counts.failed})` },
+            { id: 'all', label: `All (${counts.all})` },
+          ] as const).map((f) => (
+            <button
+              key={f.id}
+              onClick={() => setFilter(f.id)}
+              className={`px-3 py-1.5 rounded-full font-semibold transition-colors ${
+                filter === f.id
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted hover:bg-muted/70'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
       </CardHeader>
       <CardContent>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="border-b">
-              <tr className="text-left">
-                <th className="py-2 font-semibold">Donor</th>
-                <th className="py-2 font-semibold">Amount</th>
-                <th className="py-2 font-semibold">Purpose</th>
-                <th className="py-2 font-semibold">Status</th>
-                <th className="py-2 font-semibold hidden sm:table-cell">Date</th>
-              </tr>
-            </thead>
-            <tbody>
-              {donations.map((d) => (
-                <tr key={d.id} className="border-b last:border-0 hover:bg-muted/30">
-                  <td className="py-3">
-                    <div className="font-medium">{d.donor_name}</div>
-                    <div className="text-xs text-muted-foreground">{d.email}</div>
-                  </td>
-                  <td className="py-3 font-mono">
-                    {new Intl.NumberFormat('en-US', { style: 'currency', currency: d.currency }).format(Number(d.amount))}
-                  </td>
-                  <td className="py-3">{d.purpose}</td>
-                  <td className="py-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
-                      d.status === 'completed' ? 'bg-success/15 text-success' :
-                      d.status === 'pending' ? 'bg-gold-400/20 text-gold-700' :
-                      'bg-destructive/15 text-destructive'
-                    }`}>
-                      {d.status}
-                    </span>
-                  </td>
-                  <td className="py-3 hidden sm:table-cell text-xs text-muted-foreground">
-                    {fmtDate(d.created_at)}
-                  </td>
+        {filtered.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-8 text-center">
+            {filter === 'pending'
+              ? 'No pending contributions to verify. '
+              : `No ${filter} contributions.`}
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="border-b">
+                <tr className="text-left">
+                  <th className="py-2 font-semibold">Donor</th>
+                  <th className="py-2 font-semibold">Amount</th>
+                  <th className="py-2 font-semibold">Purpose</th>
+                  <th className="py-2 font-semibold">Method</th>
+                  <th className="py-2 font-semibold">Status</th>
+                  <th className="py-2 font-semibold hidden md:table-cell">Date</th>
+                  <th className="py-2 font-semibold text-right">Action</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {filtered.map((d) => (
+                  <tr key={d.id} className="border-b last:border-0 hover:bg-muted/30">
+                    <td className="py-3">
+                      <div className="font-medium">{d.donor_name}</div>
+                      <div className="text-xs text-muted-foreground">{d.email}</div>
+                    </td>
+                    <td className="py-3 font-mono">
+                      {fmtMoney(Number(d.amount))}
+                    </td>
+                    <td className="py-3">
+                      <div>{d.purpose}</div>
+                      {d.reference_code && (
+                        <div className="text-xs text-muted-foreground">Ref: {d.reference_code}</div>
+                      )}
+                    </td>
+                    <td className="py-3 text-xs uppercase tracking-wide text-muted-foreground">
+                      {d.method_id ? d.method_id.slice(0, 8) : '—'}
+                    </td>
+                    <td className="py-3">
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+                        d.status === 'completed' ? 'bg-success/15 text-success' :
+                        d.status === 'pending' ? 'bg-gold-400/20 text-gold-700' :
+                        'bg-destructive/15 text-destructive'
+                      }`}>
+                        {d.status}
+                      </span>
+                      {d.admin_note && (
+                        <div className="text-xs text-muted-foreground mt-1 max-w-[200px] truncate" title={d.admin_note}>
+                          Note: {d.admin_note}
+                        </div>
+                      )}
+                    </td>
+                    <td className="py-3 hidden md:table-cell text-xs text-muted-foreground">
+                      {fmtDate(d.created_at)}
+                    </td>
+                    <td className="py-3 text-right">
+                      {d.status === 'pending' ? (
+                        <div className="flex gap-1 justify-end">
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            disabled={acting === d.id}
+                            onClick={() => handleVerify(d)}
+                            leftIcon={<CheckCircle className="w-3.5 h-3.5" />}
+                          >
+                            Verify
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={acting === d.id}
+                            onClick={() => { setRejectingId(d.id); setRejectNote(''); }}
+                            leftIcon={<XCircle className="w-3.5 h-3.5" />}
+                          >
+                            Reject
+                          </Button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">
+                          {d.verified_at ? `verified ${fmtDate(d.verified_at)}` : '—'}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </CardContent>
+
+      {/* Reject modal */}
+      {rejectingId && (
+        <Modal onClose={() => setRejectingId(null)} title="Reject contribution">
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Provide an optional reason. The donor will see this note on their dashboard.
+            </p>
+            <Textarea
+              label="Reason (optional)"
+              value={rejectNote}
+              onChange={(e) => setRejectNote(e.target.value)}
+              rows={3}
+              placeholder="e.g. Reference number doesn't match our records"
+            />
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setRejectingId(null)}>Cancel</Button>
+              <Button
+                variant="destructive"
+                onClick={handleReject}
+                disabled={acting === rejectingId}
+                isLoading={acting === rejectingId}
+                leftIcon={<XCircle className="w-4 h-4" />}
+              >
+                Reject
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </Card>
   );
 };

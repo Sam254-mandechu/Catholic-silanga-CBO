@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Mail, Phone, Award, Users } from 'lucide-react';
 import { PageHeader } from '../components/common/PageHeader';
 import { Loader } from '../components/common/Loader';
 import { Card, CardContent } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
-import { listApprovedMembersByHierarchy } from '../services/supabaseAuth';
+import { useProfilesLive } from '../hooks/useProfilesLive';
 import { HIERARCHY_WEIGHT } from '../services/supabaseData';
 import type { Profile } from '../types/database';
 import { HIERARCHY_ORDER } from '../types/database';
@@ -65,28 +65,12 @@ const MemberCard: React.FC<{ member: Profile; rank: number }> = ({ member, rank 
 };
 
 export const MembersPage: React.FC = () => {
-  const [members, setMembers] = useState<Profile[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Live subscription — admin's edits to any member appear here in real time.
+  const { profiles: allActive, loading } = useProfilesLive({
+    filter: (p) => p.status === 'active',
+  });
+  const members = allActive;
   const [search, setSearch] = useState('');
-
-  useEffect(() => {
-    let mounted = true;
-    const run = async () => {
-      try {
-        const data = await listApprovedMembersByHierarchy();
-        if (mounted) setMembers(data);
-      } catch (err) {
-        console.warn('failed to load members', err);
-        if (mounted) setMembers([]);
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    };
-    run();
-    return () => {
-      mounted = false;
-    };
-  }, []);
 
   // Sort by hierarchy weight (Chairperson first), then by joined_at desc as tie-breaker
   const sorted = useMemo(() => {
