@@ -36,9 +36,12 @@ import type {
   NotificationKind,
 
   Fine,
-  FineStats,
-  ExpenseCategory,
-} from '../types/database';
+    FineStats,
+    ExpenseCategory,
+    // v11 — financial record summaries
+    FinancialRecordSummary,
+    FinancialRecordPreview,
+  } from '../types/database';
 
 // =====================================================================
 // PROJECTS
@@ -1576,4 +1579,91 @@ export async function treasurerEditExpense(
   });
   if (error) throw error;
   return data as Expense;
+}
+
+
+// =====================================================================
+// v11 — Financial Record Summaries (Treasurer "Create Record" wizard)
+// =====================================================================
+
+/**
+ * Live preview of a date-range snapshot. Returns totals + per-line
+ * breakdown WITHOUT persisting. Safe to call repeatedly as the user
+ * tweaks dates / categories in the wizard.
+ */
+export async function previewFinancialSummary(input: {
+  period_start: string;
+  period_end: string;
+  include_donations?: boolean;
+  include_expenses?: boolean;
+  include_fines_paid?: boolean;
+  include_fines_unpaid?: boolean;
+  include_fines_waived?: boolean;
+}): Promise<FinancialRecordPreview> {
+  const { data, error } = await supabase.rpc('preview_financial_summary', {
+    p_period_start: input.period_start,
+    p_period_end: input.period_end,
+    p_include_donations: input.include_donations ?? true,
+    p_include_expenses: input.include_expenses ?? true,
+    p_include_fines_paid: input.include_fines_paid ?? true,
+    p_include_fines_unpaid: input.include_fines_unpaid ?? true,
+    p_include_fines_waived: input.include_fines_waived ?? false,
+  });
+  if (error) throw error;
+  return data as FinancialRecordPreview;
+}
+
+/**
+ * Persist a financial record snapshot. When `publish: true`, the record
+ * goes public immediately at /finance and /finance/:id. When false,
+ * it's saved as a draft the Treasurer can edit later.
+ */
+export async function createFinancialRecordSummary(input: {
+  title: string;
+  period_start: string;
+  period_end: string;
+  include_donations?: boolean;
+  include_expenses?: boolean;
+  include_fines_paid?: boolean;
+  include_fines_unpaid?: boolean;
+  include_fines_waived?: boolean;
+  publish?: boolean;
+  notes?: string | null;
+}): Promise<FinancialRecordSummary> {
+  const { data, error } = await supabase.rpc('create_financial_record_summary', {
+    p_title: input.title,
+    p_period_start: input.period_start,
+    p_period_end: input.period_end,
+    p_include_donations: input.include_donations ?? true,
+    p_include_expenses: input.include_expenses ?? true,
+    p_include_fines_paid: input.include_fines_paid ?? true,
+    p_include_fines_unpaid: input.include_fines_unpaid ?? true,
+    p_include_fines_waived: input.include_fines_waived ?? false,
+    p_publish: input.publish ?? true,
+    p_notes: input.notes ?? null,
+  });
+  if (error) throw error;
+  return data as FinancialRecordSummary;
+}
+
+/** List published records (or include drafts if requested). */
+export async function listFinancialRecordSummaries(
+  includeDrafts = false,
+): Promise<FinancialRecordSummary[]> {
+  const { data, error } = await supabase.rpc('list_financial_record_summaries', {
+    p_include_drafts: includeDrafts,
+  });
+  if (error) throw error;
+  return (data ?? []) as FinancialRecordSummary[];
+}
+
+/** Fetch a single record by id. Public-readable if status='published'. */
+export async function getFinancialRecordSummary(
+  id: string,
+): Promise<FinancialRecordSummary | null> {
+  const { data, error } = await supabase.rpc('get_financial_record_summary', {
+    p_id: id,
+  });
+  if (error) throw error;
+  return (data as FinancialRecordSummary) ?? null;
 }

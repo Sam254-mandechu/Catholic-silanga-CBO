@@ -4,6 +4,8 @@ import { motion } from 'framer-motion';
 import {
   Banknote, ClipboardList, Heart, BarChart3, LogOut,
   Plus, Trash2, Save, CheckCircle, XCircle, Eye, Receipt,
+  AlertCircle, Users, CreditCard,
+  Sparkles, Pencil, Search, Send,
 } from 'lucide-react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip,
@@ -20,18 +22,40 @@ import { toast } from '../utils/toast';
 import {
   getRecentDonations,
   adminVerifyDonation,
+  treasurerRecordDonation,
   getExpenses, createExpense, approveExpense, deleteExpense,
   getFinancialReports,
   submitFinancialReport, approveFinancialReport,
+  getPaymentMethods, upsertPaymentMethod, deletePaymentMethod,
+  getFines,
+  listFinancialRecordSummaries,
 } from '../services/supabaseData';
+import { listApprovedMembersByHierarchy } from '../services/supabaseAuth';
+import { supabase } from '../config/supabaseClient';
+import { RecordsTab } from '../components/treasurer/RecordsTab';
 import type {
   Donation, Expense, ExpenseCategory, FinancialReport,
+  PaymentMethod, PaymentMethodType, Fine, FineStatus,
+  Profile, FinancialRecordSummary,
 } from '../types/database';
 
-type Tab = 'overview' | 'donations' | 'expenses' | 'reports' | 'analytics';
+type Tab =
+  | 'overview' | 'donations' | 'expenses' | 'reports' | 'analytics'
+  | 'fines' | 'payment-methods' | 'members' | 'records';
 
 const PIE_COLORS = ['#a82524', '#f59e0b', '#15803d', '#6366f1', '#db2777', '#0891b2', '#7c3aed', '#0d9488'];
 const CURRENCY = 'KES';
+
+const PAYMENT_METHOD_TYPES: { value: PaymentMethodType; label: string }[] = [
+  { value: 'bank', label: 'Bank transfer' },
+  { value: 'paybill', label: 'Paybill' },
+  { value: 'till', label: 'Till number' },
+  { value: 'mpesa', label: 'M-Pesa' },
+  { value: 'mobile_money', label: 'Mobile money' },
+  { value: 'card', label: 'Card' },
+  { value: 'cash', label: 'Cash' },
+  { value: 'other', label: 'Other' },
+];
 
 function fmtMoney(n: number): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: CURRENCY }).format(n);
@@ -40,6 +64,8 @@ function fmtDate(iso: string): string {
   try { return new Date(iso).toLocaleDateString(); } catch { return iso; }
 }
 
+// ============================================================
+// MAIN PAGE
 // ============================================================
 export const TreasurerPortal: React.FC = () => {
   const navigate = useNavigate();
@@ -50,21 +76,33 @@ export const TreasurerPortal: React.FC = () => {
   const [donations, setDonations] = useState<Donation[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [reports, setReports] = useState<FinancialReport[]>([]);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
+  const [fines, setFines] = useState<Fine[]>([]);
+  const [members, setMembers] = useState<Profile[]>([]);
+  const [records, setRecords] = useState<FinancialRecordSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
-        const [d, e, r] = await Promise.all([
+        const [d, e, r, pm, fn, mb, rec] = await Promise.all([
           getRecentDonations(200),
           getExpenses(),
           getFinancialReports(),
+          getPaymentMethods(),
+          getFines().catch(() => [] as Fine[]),
+          listApprovedMembersByHierarchy().catch(() => [] as Profile[]),
+          listFinancialRecordSummaries(true).catch(() => [] as FinancialRecordSummary[]),
         ]);
         if (!mounted) return;
         setDonations(d);
         setExpenses(e);
         setReports(r);
+        setPaymentMethods(pm);
+        setFines(fn);
+        setMembers(mb);
+        setRecords(rec);
       } catch (err) {
         console.warn('Treasurer data load failed', err);
       } finally {
@@ -83,10 +121,13 @@ export const TreasurerPortal: React.FC = () => {
   const completedDonations = useMemo(() => donations.filter((d) => d.status === 'completed'), [donations]);
   const totalIncome = useMemo(() => completedDonations.reduce((s, d) => s + Number(d.amount), 0), [completedDonations]);
   const totalExpenses = useMemo(() => expenses.reduce((s, e) => s + Number(e.amount), 0), [expenses]);
-  const netPosition = totalIncome - totalExpenses;
   const approvedExpenses = useMemo(() => expenses.filter((e) => !!e.approved_at), [expenses]);
+  const paidFines = useMemo(() => fines.filter((f) => f.status === 'paid'), [fines]);
+  const unpaidFines = useMemo(() => fines.filter((f) => f.status === 'unpaid'), [fines]);
+  const finesCollected = useMemo(() => paidFines.reduce((s, f) => s + Number(f.amount), 0), [paidFines]);
+  const finesOutstanding = useMemo(() => unpaidFines.reduce((s, f) => s + Number(f.amount), 0), [unpaidFines]);
 
-  // Monthly trends (last 12 months)
+  // Monthly trends (last 12 months) — income + expenses + paid fines
   const monthly = useMemo(() => {
     const map = new Map<string, { income: number; expenses: number }>();
     const now = new Date();
@@ -100,18 +141,31 @@ export const TreasurerPortal: React.FC = () => {
       const m = map.get(k);
       if (m) m.income += Number(d.amount);
     });
+    paidFines.forEach((f) => {
+      if (!f.paid_at) return;
+      const k = f.paid_at.slice(0, 7);
+      const m = map.get(k);
+      if (m) m.income += Number(f.amount);
+    });
     expenses.forEach((e) => {
       const k = e.expense_date.slice(0, 7);
       const m = map.get(k);
       if (m) m.expenses += Number(e.amount);
     });
-    return Array.from(map.entries()).map(([month, v]) => ({ month, ...v }));
-  }, [completedDonations, expenses]);
+    return Array.from(map.entries()).map(([month, v]) => ({
+      month: month.slice(5) + '/' + month.slice(2, 4),
+      ...v,
+    }));
+  }, [completedDonations, paidFines, expenses]);
 
   const tabs: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
     { id: 'overview', label: 'Overview', icon: BarChart3 },
     { id: 'donations', label: 'Donations', icon: Heart },
     { id: 'expenses', label: 'Expenses', icon: Receipt },
+    { id: 'fines', label: 'Fines', icon: AlertCircle },
+    { id: 'records', label: 'Create Record', icon: Sparkles },
+    { id: 'payment-methods', label: 'Payment Methods', icon: CreditCard },
+    { id: 'members', label: 'Members', icon: Users },
     { id: 'reports', label: 'Reports', icon: ClipboardList },
     { id: 'analytics', label: 'Analytics', icon: BarChart3 },
   ];
@@ -136,7 +190,7 @@ export const TreasurerPortal: React.FC = () => {
               {profile?.display_name ?? 'Treasurer'}
             </h1>
             <p className="text-sm text-muted-foreground">
-              Track income, expenses, and generate financial reports.
+              Track income, expenses, fines, payment methods, and generate financial reports.
             </p>
           </div>
           <Button variant="destructive" onClick={handleLogout} leftIcon={<LogOut className="w-4 h-4" />}>
@@ -174,15 +228,17 @@ export const TreasurerPortal: React.FC = () => {
             {tab === 'overview' && !loading && (
               <>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <StatCard label="Total income" value={fmtMoney(totalIncome)} icon={Heart} color="text-success" />
+                  <StatCard label="Total income" value={fmtMoney(totalIncome + finesCollected)} icon={Heart} color="text-success" />
                   <StatCard label="Total expenses" value={fmtMoney(totalExpenses)} icon={Receipt} color="text-destructive" />
-                  <StatCard label="Net position" value={fmtMoney(netPosition)} icon={BarChart3}
-                    color={netPosition >= 0 ? 'text-success' : 'text-destructive'} />
-                  <StatCard label="Donations (verified)" value={completedDonations.length} icon={Heart} color="text-pink-700" />
+                  <StatCard label="Net position" value={fmtMoney(totalIncome + finesCollected - totalExpenses)}
+                    icon={BarChart3}
+                    color={totalIncome + finesCollected - totalExpenses >= 0 ? 'text-success' : 'text-destructive'} />
+                  <StatCard label="Fines collected / outstanding" value={`${fmtMoney(finesCollected)} / ${fmtMoney(finesOutstanding)}`}
+                    icon={AlertCircle} color="text-gold-700" />
                 </div>
                 <Card>
                   <CardHeader>
-                    <CardTitle>Income vs Expenses — last 12 months</CardTitle>
+                    <CardTitle>Income (incl. fines) vs Expenses — last 12 months</CardTitle>
                   </CardHeader>
                   <CardContent>
                     <ResponsiveContainer width="100%" height={300}>
@@ -192,7 +248,7 @@ export const TreasurerPortal: React.FC = () => {
                         <YAxis tick={{ fontSize: 11 }} />
                         <Tooltip formatter={(v) => fmtMoney(Number(v))} />
                         <Legend wrapperStyle={{ fontSize: 12 }} />
-                        <Bar dataKey="income" name="Income" fill="#15803d" radius={[6, 6, 0, 0]} />
+                        <Bar dataKey="income" name="Income (donations + paid fines)" fill="#15803d" radius={[6, 6, 0, 0]} />
                         <Bar dataKey="expenses" name="Expenses" fill="#a82524" radius={[6, 6, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
@@ -202,7 +258,12 @@ export const TreasurerPortal: React.FC = () => {
             )}
 
             {tab === 'donations' && (
-              <DonationsTab donations={donations} setDonations={setDonations} />
+              <DonationsTab
+                donations={donations}
+                setDonations={setDonations}
+                members={members}
+                paymentMethods={paymentMethods}
+              />
             )}
             {tab === 'expenses' && (
               <ExpensesTab
@@ -210,6 +271,21 @@ export const TreasurerPortal: React.FC = () => {
                 setExpenses={setExpenses}
                 isAdmin={isAdmin()}
               />
+            )}
+            {tab === 'fines' && (
+              <FinesTab fines={fines} setFines={setFines} members={members} />
+            )}
+            {tab === 'records' && (
+              <RecordsTab records={records} setRecords={setRecords} />
+            )}
+            {tab === 'payment-methods' && (
+              <PaymentMethodsTab
+                methods={paymentMethods}
+                setMethods={setPaymentMethods}
+              />
+            )}
+            {tab === 'members' && (
+              <MembersTab members={members} />
             )}
             {tab === 'reports' && (
               <ReportsTab
@@ -221,7 +297,7 @@ export const TreasurerPortal: React.FC = () => {
             {tab === 'analytics' && (
               <AnalyticsTab
                 monthly={monthly}
-                totalIncome={totalIncome}
+                totalIncome={totalIncome + finesCollected}
                 totalExpenses={totalExpenses}
                 approvedExpenses={approvedExpenses}
                 expenses={expenses}
@@ -235,30 +311,54 @@ export const TreasurerPortal: React.FC = () => {
 };
 
 // ============================================================
+// STAT CARD
+// ============================================================
 const StatCard: React.FC<{
   label: string;
-  value: string | number;
+  value: string;
   icon: React.ComponentType<{ className?: string }>;
   color: string;
 }> = ({ label, value, icon: Icon, color }) => (
-  <Card>
-    <CardContent className="p-5">
-      <Icon className={`w-7 h-7 ${color} mb-2`} />
-      <div className="text-xl font-bold">{value}</div>
-      <div className="text-xs text-muted-foreground">{label}</div>
-    </CardContent>
-  </Card>
+  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
+    <Card className="h-full">
+      <CardContent className="p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">{label}</div>
+            <div className={`text-2xl font-bold font-mono mt-1 ${color}`}>{value}</div>
+          </div>
+          <Icon className={`w-6 h-6 flex-shrink-0 ${color}`} />
+        </div>
+      </CardContent>
+    </Card>
+  </motion.div>
 );
 
+// ============================================================
+// DONATIONS TAB — verify/reject + record manually
 // ============================================================
 const DonationsTab: React.FC<{
   donations: Donation[];
   setDonations: (d: Donation[]) => void;
-}> = ({ donations, setDonations }) => {
+  members: Profile[];
+  paymentMethods: PaymentMethod[];
+}> = ({ donations, setDonations, members, paymentMethods }) => {
   const [filter, setFilter] = useState<'pending' | 'completed' | 'failed' | 'all'>('pending');
   const [acting, setActing] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectNote, setRejectNote] = useState('');
+  const [recording, setRecording] = useState(false);
+  const [form, setForm] = useState({
+    donor_name: '',
+    email: '',
+    amount: 0,
+    currency: CURRENCY,
+    purpose: 'General donation',
+    message: '',
+    method_id: '',
+    reference_code: '',
+    donor_id: '',
+  });
 
   const filtered = useMemo(() => {
     if (filter === 'all') return donations;
@@ -271,6 +371,14 @@ const DonationsTab: React.FC<{
     failed: donations.filter((d) => d.status === 'failed').length,
     all: donations.length,
   }), [donations]);
+
+  const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
+
+  const resetForm = () => setForm({
+    donor_name: '', email: '', amount: 0,
+    currency: CURRENCY, purpose: 'General donation', message: '',
+    method_id: '', reference_code: '', donor_id: '',
+  });
 
   const handleVerify = async (d: Donation) => {
     setActing(d.id);
@@ -304,37 +412,66 @@ const DonationsTab: React.FC<{
     }
   };
 
+  const handleRecordManually = async () => {
+    if (!form.donor_name.trim() || !form.email.trim() || form.amount <= 0) {
+      toast.error('Donor name, email, and amount are required');
+      return;
+    }
+    try {
+      const created = await treasurerRecordDonation({
+        donor_name: form.donor_name.trim(),
+        email: form.email.trim(),
+        amount: form.amount,
+        currency: form.currency,
+        purpose: form.purpose.trim() || 'General donation',
+        message: form.message.trim() || null,
+        method_id: form.method_id || null,
+        reference_code: form.reference_code.trim() || null,
+        donor_id: form.donor_id || null,
+      });
+      setDonations([created, ...donations]);
+      toast.success(`Recorded donation from ${form.donor_name}`);
+      setRecording(false);
+      resetForm();
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Failed to record donation');
+    }
+  };
+
   return (
     <Card>
       <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <CardTitle>Donations / Contributions</CardTitle>
-        <div className="flex gap-1 flex-wrap text-xs">
-          {([
-            { id: 'pending', label: `Pending (${counts.pending})` },
-            { id: 'completed', label: `Verified (${counts.completed})` },
-            { id: 'failed', label: `Rejected (${counts.failed})` },
-            { id: 'all', label: `All (${counts.all})` },
-          ] as const).map((f) => (
-            <button
-              key={f.id}
-              onClick={() => setFilter(f.id)}
-              className={`px-3 py-1.5 rounded-full font-semibold transition-colors ${
-                filter === f.id
-                  ? 'bg-primary text-primary-foreground'
-                  : 'bg-muted hover:bg-muted/70'
-              }`}
-            >
-              {f.label}
-            </button>
-          ))}
+        <div className="flex gap-2 items-center">
+          <div className="flex gap-1 flex-wrap text-xs">
+            {([
+              { id: 'pending' as const, label: `Pending (${counts.pending})` },
+              { id: 'completed' as const, label: `Verified (${counts.completed})` },
+              { id: 'failed' as const, label: `Rejected (${counts.failed})` },
+              { id: 'all' as const, label: `All (${counts.all})` },
+            ] as const).map((f) => (
+              <button
+                key={f.id}
+                onClick={() => setFilter(f.id)}
+                className={`px-3 py-1.5 rounded-full font-semibold transition-colors ${
+                  filter === f.id
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted hover:bg-muted/70'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+          <Button size="sm" onClick={() => { resetForm(); setRecording(true); }} leftIcon={<Plus className="w-4 h-4" />}>
+            Record manually
+          </Button>
         </div>
       </CardHeader>
       <CardContent>
         {filtered.length === 0 ? (
           <p className="text-sm text-muted-foreground py-8 text-center">
-            {filter === 'pending'
-              ? 'No pending contributions to verify. '
-              : `No ${filter} contributions.`}
+            {filter === 'pending' ? 'No pending contributions to verify.' : `No ${filter} contributions.`}
           </p>
         ) : (
           <div className="overflow-x-auto">
@@ -345,107 +482,171 @@ const DonationsTab: React.FC<{
                   <th className="py-2 font-semibold">Amount</th>
                   <th className="py-2 font-semibold">Purpose</th>
                   <th className="py-2 font-semibold">Method</th>
+                  <th className="py-2 font-semibold">Linked member</th>
                   <th className="py-2 font-semibold">Status</th>
                   <th className="py-2 font-semibold hidden md:table-cell">Date</th>
                   <th className="py-2 font-semibold text-right">Action</th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((d) => (
-                  <tr key={d.id} className="border-b last:border-0 hover:bg-muted/30">
-                    <td className="py-3">
-                      <div className="font-medium">{d.donor_name}</div>
-                      <div className="text-xs text-muted-foreground">{d.email}</div>
-                    </td>
-                    <td className="py-3 font-mono">
-                      {fmtMoney(Number(d.amount))}
-                    </td>
-                    <td className="py-3">
-                      <div>{d.purpose}</div>
-                      {d.reference_code && (
-                        <div className="text-xs text-muted-foreground">Ref: {d.reference_code}</div>
-                      )}
-                    </td>
-                    <td className="py-3 text-xs uppercase tracking-wide text-muted-foreground">
-                      {d.method_id ? d.method_id.slice(0, 8) : '—'}
-                    </td>
-                    <td className="py-3">
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
-                        d.status === 'completed' ? 'bg-success/15 text-success' :
-                        d.status === 'pending' ? 'bg-gold-400/20 text-gold-700' :
-                        'bg-destructive/15 text-destructive'
-                      }`}>
-                        {d.status}
-                      </span>
-                      {d.admin_note && (
-                        <div className="text-xs text-muted-foreground mt-1 max-w-[200px] truncate" title={d.admin_note}>
-                          Note: {d.admin_note}
-                        </div>
-                      )}
-                    </td>
-                    <td className="py-3 hidden md:table-cell text-xs text-muted-foreground">
-                      {fmtDate(d.created_at)}
-                    </td>
-                    <td className="py-3 text-right">
-                      {d.status === 'pending' ? (
-                        <div className="flex gap-1 justify-end">
-                          <Button
-                            size="sm"
-                            variant="primary"
-                            disabled={acting === d.id}
-                            onClick={() => handleVerify(d)}
-                            leftIcon={<CheckCircle className="w-3.5 h-3.5" />}
-                          >
-                            Verify
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={acting === d.id}
-                            onClick={() => { setRejectingId(d.id); setRejectNote(''); }}
-                            leftIcon={<XCircle className="w-3.5 h-3.5" />}
-                          >
-                            Reject
-                          </Button>
-                        </div>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">
-                          {d.verified_at ? `verified ${fmtDate(d.verified_at)}` : '—'}
+                {filtered.map((d) => {
+                  const m = d.member_id ? memberById.get(d.member_id) : undefined;
+                  const pm = d.method_id ? paymentMethods.find((p) => p.id === d.method_id) : undefined;
+                  return (
+                    <tr key={d.id} className="border-b last:border-0 hover:bg-muted/30">
+                      <td className="py-3">
+                        <div className="font-medium">{d.donor_name}</div>
+                        <div className="text-xs text-muted-foreground">{d.email}</div>
+                      </td>
+                      <td className="py-3 font-mono">{fmtMoney(Number(d.amount))}</td>
+                      <td className="py-3">
+                        <div>{d.purpose}</div>
+                        {d.reference_code && (
+                          <div className="text-xs text-muted-foreground">Ref: {d.reference_code}</div>
+                        )}
+                      </td>
+                      <td className="py-3 text-xs">
+                        {pm ? (
+                          <span className="px-2 py-0.5 rounded-full bg-muted text-foreground font-semibold">
+                            {pm.label}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="py-3 text-xs">
+                        {m ? (
+                          <span className="text-foreground">{m.display_name}</span>
+                        ) : (
+                          <span className="text-muted-foreground">Not linked</span>
+                        )}
+                      </td>
+                      <td className="py-3">
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+                          d.status === 'completed' ? 'bg-success/15 text-success' :
+                          d.status === 'pending' ? 'bg-gold-400/20 text-gold-700' :
+                          'bg-destructive/15 text-destructive'
+                        }`}>
+                          {d.status}
                         </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                        {d.admin_note && (
+                          <div className="text-xs text-muted-foreground mt-1 max-w-[200px] truncate" title={d.admin_note}>
+                            Note: {d.admin_note}
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-3 hidden md:table-cell text-xs text-muted-foreground">
+                        {fmtDate(d.created_at)}
+                      </td>
+                      <td className="py-3 text-right">
+                        {d.status === 'pending' ? (
+                          <div className="flex gap-1 justify-end">
+                            <Button size="sm" variant="primary" disabled={acting === d.id}
+                              onClick={() => handleVerify(d)} leftIcon={<CheckCircle className="w-3.5 h-3.5" />}>
+                              Verify
+                            </Button>
+                            <Button size="sm" variant="outline" disabled={acting === d.id}
+                              onClick={() => { setRejectingId(d.id); setRejectNote(''); }}
+                              leftIcon={<XCircle className="w-3.5 h-3.5" />}>
+                              Reject
+                            </Button>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            {d.verified_at ? `verified ${fmtDate(d.verified_at)}` : '—'}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </CardContent>
 
-      {/* Reject modal */}
       {rejectingId && (
         <Modal onClose={() => setRejectingId(null)} title="Reject contribution">
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">
               Provide an optional reason. The donor will see this note on their dashboard.
             </p>
-            <Textarea
-              label="Reason (optional)"
-              value={rejectNote}
-              onChange={(e) => setRejectNote(e.target.value)}
-              rows={3}
-              placeholder="e.g. Reference number doesn't match our records"
-            />
+            <Textarea label="Reason (optional)" value={rejectNote}
+              onChange={(e) => setRejectNote(e.target.value)} rows={3}
+              placeholder="e.g. Reference number doesn't match our records" />
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => setRejectingId(null)}>Cancel</Button>
-              <Button
-                variant="destructive"
-                onClick={handleReject}
-                disabled={acting === rejectingId}
-                isLoading={acting === rejectingId}
-                leftIcon={<XCircle className="w-4 h-4" />}
-              >
+              <Button variant="destructive" onClick={handleReject}
+                disabled={acting === rejectingId} isLoading={acting === rejectingId}
+                leftIcon={<XCircle className="w-4 h-4" />}>
                 Reject
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {recording && (
+        <Modal onClose={() => setRecording(false)} title="Record donation manually" wide>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              For donations received offline (cash, M-Pesa confirmation, etc.). The treasurer
+              is recorded as the verifier, and the donor gets a notification if linked to a member.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input label="Donor name *" value={form.donor_name}
+                onChange={(e) => setForm({ ...form, donor_name: e.target.value })} />
+              <Input label="Donor email *" type="email" value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })} />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <Input label="Amount *" type="number" step="0.01" value={form.amount || ''}
+                onChange={(e) => setForm({ ...form, amount: Number(e.target.value) })} />
+              <Input label="Currency" value={form.currency}
+                onChange={(e) => setForm({ ...form, currency: e.target.value })} />
+              <Input label="Purpose" value={form.purpose}
+                onChange={(e) => setForm({ ...form, purpose: e.target.value })} />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium mb-1.5">Payment method</label>
+                <select
+                  value={form.method_id}
+                  onChange={(e) => setForm({ ...form, method_id: e.target.value })}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                >
+                  <option value="">— select method —</option>
+                  {paymentMethods.filter((pm) => pm.is_active).map((pm) => (
+                    <option key={pm.id} value={pm.id}>{pm.label}</option>
+                  ))}
+                </select>
+              </div>
+              <Input label="Reference code (optional)" value={form.reference_code}
+                onChange={(e) => setForm({ ...form, reference_code: e.target.value })}
+                placeholder="e.g. M-PESA code" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Linked member (optional)</label>
+              <select
+                value={form.donor_id}
+                onChange={(e) => setForm({ ...form, donor_id: e.target.value })}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                <option value="">— not a member —</option>
+                {members.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.display_name} ({m.email}) {m.hierarchy_role ? `· ${m.hierarchy_role}` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <Textarea label="Message (optional)" rows={2} value={form.message}
+              onChange={(e) => setForm({ ...form, message: e.target.value })} />
+            <div className="flex justify-end gap-2 pt-2 border-t">
+              <Button variant="outline" onClick={() => setRecording(false)}>Cancel</Button>
+              <Button onClick={handleRecordManually} leftIcon={<Save className="w-4 h-4" />}>
+                Record donation
               </Button>
             </div>
           </div>
@@ -456,51 +657,31 @@ const DonationsTab: React.FC<{
 };
 
 // ============================================================
+// EXPENSES TAB
+// ============================================================
 const ExpensesTab: React.FC<{
   expenses: Expense[];
   setExpenses: (e: Expense[]) => void;
   isAdmin: boolean;
 }> = ({ expenses, setExpenses, isAdmin }) => {
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState<{
-    title: string;
-    amount: number;
-    category: ExpenseCategory;
-    description: string;
-    vendor: string;
-    receipt_url: string;
-    currency: string;
-    expense_date: string;
-  }>({
-    title: '',
-    amount: 0,
-    category: 'operations',
-    description: '',
-    vendor: '',
-    receipt_url: '',
-    currency: CURRENCY,
+  const [form, setForm] = useState({
+    title: '', amount: 0, category: 'operations' as ExpenseCategory,
+    description: '', vendor: '', receipt_url: '', currency: CURRENCY,
     expense_date: new Date().toISOString().slice(0, 10),
   });
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (form.amount <= 0) {
-      toast.error('Amount must be positive');
-      return;
-    }
+    if (form.amount <= 0) { toast.error('Amount must be positive'); return; }
     try {
       const created = await createExpense({
-        title: form.title,
-        amount: form.amount,
-        category: form.category,
-        description: form.description || null,
-        vendor: form.vendor || null,
-        receipt_url: form.receipt_url || null,
-        currency: form.currency,
-        expense_date: form.expense_date,
+        title: form.title, amount: form.amount, category: form.category,
+        description: form.description || null, vendor: form.vendor || null,
+        receipt_url: form.receipt_url || null, currency: form.currency, expense_date: form.expense_date,
       });
       setExpenses([created, ...expenses]);
-      toast.success('Expense recorded');
+      toast.success('Expense recorded (pending admin approval)');
       setShowForm(false);
       setForm({
         title: '', amount: 0, category: 'operations',
@@ -517,9 +698,7 @@ const ExpensesTab: React.FC<{
       const updated = await approveExpense(e.id);
       setExpenses(expenses.map((x) => (x.id === updated.id ? updated : x)));
       toast.success('Expense approved');
-    } catch (err: any) {
-      toast.error(err?.message ?? 'Failed');
-    }
+    } catch (err: any) { toast.error(err?.message ?? 'Failed'); }
   };
 
   const handleDelete = async (e: Expense) => {
@@ -528,9 +707,7 @@ const ExpensesTab: React.FC<{
       await deleteExpense(e.id);
       setExpenses(expenses.filter((x) => x.id !== e.id));
       toast.success('Deleted');
-    } catch (err: any) {
-      toast.error(err?.message ?? 'Failed');
-    }
+    } catch (err: any) { toast.error(err?.message ?? 'Failed'); }
   };
 
   const total = useMemo(() => expenses.reduce((s, e) => s + Number(e.amount), 0), [expenses]);
@@ -538,11 +715,8 @@ const ExpensesTab: React.FC<{
   return (
     <Card>
       <CardHeader className="flex flex-row justify-between items-center flex-wrap gap-2">
-        <CardTitle>
-          Expenses ({expenses.length}) — Total {fmtMoney(total)}
-        </CardTitle>
-        <Button size="sm" leftIcon={<Plus className="w-4 h-4" />}
-          onClick={() => setShowForm(!showForm)}>
+        <CardTitle>Expenses ({expenses.length}) — Total {fmtMoney(total)}</CardTitle>
+        <Button size="sm" leftIcon={<Plus className="w-4 h-4" />} onClick={() => setShowForm(!showForm)}>
           {showForm ? 'Cancel' : 'Add Expense'}
         </Button>
       </CardHeader>
@@ -556,15 +730,13 @@ const ExpensesTab: React.FC<{
                 onChange={(e) => setForm((f) => ({ ...f, vendor: e.target.value }))} />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <Input label="Amount *" required type="number" step="0.01" value={form.amount}
+              <Input label="Amount *" required type="number" step="0.01" value={form.amount || ''}
                 onChange={(e) => setForm((f) => ({ ...f, amount: Number(e.target.value) }))} />
               <div>
                 <label className="block text-sm font-medium mb-1.5">Category</label>
-                <select
-                  value={form.category}
+                <select value={form.category}
                   onChange={(e) => setForm((f) => ({ ...f, category: e.target.value as ExpenseCategory }))}
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                >
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
                   <option value="operations">Operations</option>
                   <option value="events">Events</option>
                   <option value="charity">Charity</option>
@@ -618,32 +790,23 @@ const ExpensesTab: React.FC<{
                     <td className="py-3 hidden sm:table-cell text-xs text-muted-foreground">{fmtDate(e.expense_date)}</td>
                     <td className="py-3">
                       {e.approved_at ? (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-success/15 text-success font-semibold">
-                          Approved
-                        </span>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-success/15 text-success font-semibold">Approved</span>
                       ) : (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-gold-400/20 text-gold-700 font-semibold">
-                          Pending
-                        </span>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-gold-400/20 text-gold-700 font-semibold">Pending</span>
                       )}
                     </td>
                     <td className="py-3">
                       <div className="flex gap-1">
                         {isAdmin && !e.approved_at && (
-                          <button
-                            onClick={() => handleApprove(e)}
+                          <button onClick={() => handleApprove(e)}
                             className="p-1.5 rounded hover:bg-success/10 text-success"
-                            aria-label="Approve"
-                            title="Approve"
-                          >
+                            aria-label="Approve" title="Approve">
                             <CheckCircle className="w-4 h-4" />
                           </button>
                         )}
-                        <button
-                          onClick={() => handleDelete(e)}
+                        <button onClick={() => handleDelete(e)}
                           className="p-1.5 rounded hover:bg-destructive/10 text-destructive"
-                          aria-label="Delete"
-                        >
+                          aria-label="Delete">
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
@@ -660,6 +823,552 @@ const ExpensesTab: React.FC<{
 };
 
 // ============================================================
+// FINES TAB
+// ============================================================
+const FinesTab: React.FC<{
+  fines: Fine[];
+  setFines: (f: Fine[]) => void;
+  members: Profile[];
+}> = ({ fines, setFines, members }) => {
+  const [filter, setFilter] = useState<FineStatus | 'all'>('all');
+  const [issuing, setIssuing] = useState(false);
+  const [form, setForm] = useState({
+    member_id: '', amount: 0, currency: CURRENCY, reason: '',
+    due_date: '', notes: '',
+  });
+  const [acting, setActing] = useState<string | null>(null);
+
+  const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
+
+  const counts = useMemo(() => ({
+    unpaid: fines.filter((f) => f.status === 'unpaid').length,
+    paid: fines.filter((f) => f.status === 'paid').length,
+    waived: fines.filter((f) => f.status === 'waived').length,
+  }), [fines]);
+
+  const filtered = useMemo(() => {
+    const sorted = filter === 'all'
+      ? [...fines]
+      : fines.filter((f) => f.status === filter);
+    return sorted.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  }, [fines, filter]);
+
+  const resetForm = () => setForm({
+    member_id: '', amount: 0, currency: CURRENCY, reason: '',
+    due_date: '', notes: '',
+  });
+
+  const handleIssue = async () => {
+    if (!form.member_id || form.amount <= 0 || !form.reason.trim()) {
+      toast.error('Member, amount, and reason are required');
+      return;
+    }
+    if (form.reason.trim().length < 3) {
+      toast.error('Reason must be at least 3 characters');
+      return;
+    }
+    try {
+      // Use the RPC directly via supabase since recordFine wraps it
+      const { data, error } = await supabase.rpc('record_fine', {
+        p_member_id: form.member_id,
+        p_amount: form.amount,
+        p_reason: form.reason.trim(),
+        p_due_date: form.due_date || null,
+        p_notes: form.notes.trim() || null,
+      });
+      if (error) throw error;
+      setFines([data as Fine, ...fines]);
+      toast.success('Fine issued — member notified');
+      setIssuing(false);
+      resetForm();
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Failed to issue fine');
+    }
+  };
+
+  const handleMarkPaid = async (f: Fine) => {
+    setActing(f.id);
+    try {
+      const { data, error } = await supabase.rpc('mark_fine_paid', { p_fine_id: f.id });
+      if (error) throw error;
+      setFines(fines.map((x) => (x.id === f.id ? (data as Fine) : x)));
+      toast.success('Marked as paid');
+    } catch (err: any) { toast.error(err?.message ?? 'Failed'); }
+    finally { setActing(null); }
+  };
+
+  const handleWaive = async (f: Fine) => {
+    const reason = window.prompt('Reason for waiving (optional):') ?? '';
+    setActing(f.id);
+    try {
+      const { data, error } = await supabase.rpc('waive_fine', { p_fine_id: f.id, p_reason: reason || null });
+      if (error) throw error;
+      setFines(fines.map((x) => (x.id === f.id ? (data as Fine) : x)));
+      toast.success('Fine waived');
+    } catch (err: any) { toast.error(err?.message ?? 'Failed'); }
+    finally { setActing(null); }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex flex-col gap-2">
+          <CardTitle>Fines ({fines.length})</CardTitle>
+          <div className="flex gap-1 flex-wrap text-xs">
+            {([
+              { id: 'unpaid' as const, label: `Unpaid (${counts.unpaid})` },
+              { id: 'paid' as const, label: `Paid (${counts.paid})` },
+              { id: 'waived' as const, label: `Waived (${counts.waived})` },
+              { id: 'all' as const, label: `All (${fines.length})` },
+            ] as const).map((f) => (
+              <button key={f.id} onClick={() => setFilter(f.id)}
+                className={`px-3 py-1.5 rounded-full font-semibold transition-colors ${
+                  filter === f.id ? 'bg-primary text-primary-foreground' : 'bg-muted hover:bg-muted/70'
+                }`}>
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <Button size="sm" leftIcon={<Plus className="w-4 h-4" />}
+          onClick={() => { resetForm(); setIssuing(true); }}>
+          Issue fine
+        </Button>
+      </CardHeader>
+      <CardContent>
+        {filtered.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-8 text-center">No fines.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="border-b">
+                <tr className="text-left">
+                  <th className="py-2 font-semibold">Member</th>
+                  <th className="py-2 font-semibold">Amount</th>
+                  <th className="py-2 font-semibold">Reason</th>
+                  <th className="py-2 font-semibold hidden sm:table-cell">Due</th>
+                  <th className="py-2 font-semibold">Status</th>
+                  <th className="py-2 font-semibold hidden md:table-cell">Issued</th>
+                  <th className="py-2 font-semibold text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((f) => {
+                  const m = memberById.get(f.member_id);
+                  return (
+                    <tr key={f.id} className="border-b last:border-0 hover:bg-muted/30">
+                      <td className="py-3">
+                        <div className="font-medium">{m?.display_name ?? 'Unknown'}</div>
+                        <div className="text-xs text-muted-foreground">{m?.email ?? f.member_id.slice(0, 8)}</div>
+                      </td>
+                      <td className="py-3 font-mono">{fmtMoney(Number(f.amount))}</td>
+                      <td className="py-3">
+                        <div>{f.reason}</div>
+                        {f.notes && <div className="text-xs text-muted-foreground line-clamp-1">{f.notes}</div>}
+                      </td>
+                      <td className="py-3 hidden sm:table-cell text-xs text-muted-foreground">
+                        {f.due_date ? fmtDate(f.due_date) : '—'}
+                      </td>
+                      <td className="py-3">
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+                          f.status === 'paid' ? 'bg-success/15 text-success' :
+                          f.status === 'waived' ? 'bg-muted text-muted-foreground' :
+                          'bg-destructive/15 text-destructive'
+                        }`}>
+                          {f.status}
+                        </span>
+                      </td>
+                      <td className="py-3 hidden md:table-cell text-xs text-muted-foreground">
+                        {fmtDate(f.created_at)}
+                      </td>
+                      <td className="py-3 text-right">
+                        <div className="flex gap-1 justify-end">
+                          {f.status === 'unpaid' && (
+                            <>
+                              <Button size="sm" variant="primary" disabled={acting === f.id}
+                                onClick={() => handleMarkPaid(f)}
+                                leftIcon={<CheckCircle className="w-3.5 h-3.5" />}>
+                                Mark paid
+                              </Button>
+                              <Button size="sm" variant="outline" disabled={acting === f.id}
+                                onClick={() => handleWaive(f)}
+                                leftIcon={<XCircle className="w-3.5 h-3.5" />}>
+                                Waive
+                              </Button>
+                            </>
+                          )}
+                          {f.status === 'paid' && f.paid_at && (
+                            <span className="text-xs text-muted-foreground self-center">
+                              paid {fmtDate(f.paid_at)}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+
+      {issuing && (
+        <Modal onClose={() => setIssuing(false)} title="Issue fine" wide>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              The member will be notified immediately. Reason is required (min 3 chars).
+            </p>
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Member *</label>
+              <select value={form.member_id}
+                onChange={(e) => setForm({ ...form, member_id: e.target.value })}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                <option value="">— select a member —</option>
+                {members.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.display_name} ({m.email}) {m.hierarchy_role ? `· ${m.hierarchy_role}` : ''}
+                  </option>
+                ))}
+              </select>
+              {members.length === 0 && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  No active members loaded — make sure members have status='active'.
+                </p>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <Input label="Amount *" type="number" step="0.01" value={form.amount || ''}
+                onChange={(e) => setForm({ ...form, amount: Number(e.target.value) })} />
+              <Input label="Currency" value={form.currency}
+                onChange={(e) => setForm({ ...form, currency: e.target.value })} />
+              <Input label="Due date (optional)" type="date" value={form.due_date}
+                onChange={(e) => setForm({ ...form, due_date: e.target.value })} />
+            </div>
+            <Textarea label="Reason *" rows={2} value={form.reason}
+              onChange={(e) => setForm({ ...form, reason: e.target.value })}
+              placeholder="e.g. Missed Sunday service without notice" />
+            <Textarea label="Internal notes (optional, not shown to member)" rows={2}
+              value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+            <div className="flex justify-end gap-2 pt-2 border-t">
+              <Button variant="outline" onClick={() => setIssuing(false)}>Cancel</Button>
+              <Button onClick={handleIssue} leftIcon={<AlertCircle className="w-4 h-4" />}>
+                Issue fine & notify member
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </Card>
+  );
+};
+
+// ============================================================
+// PAYMENT METHODS TAB
+// ============================================================
+const PaymentMethodsTab: React.FC<{
+  methods: PaymentMethod[];
+  setMethods: (m: PaymentMethod[]) => void;
+}> = ({ methods, setMethods }) => {
+  const [editing, setEditing] = useState<PaymentMethod | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState({
+    method: 'mpesa' as PaymentMethodType,
+    label: '',
+    details: {} as Record<string, string>,
+    instructions: '',
+    is_active: true,
+    display_order: 0,
+  });
+  const [detailsRaw, setDetailsRaw] = useState('');
+
+  const resetForm = () => {
+    setForm({ method: 'mpesa', label: '', details: {}, instructions: '', is_active: true, display_order: 0 });
+    setDetailsRaw('');
+  };
+
+  const openCreate = () => { resetForm(); setCreating(true); };
+
+  const openEdit = (m: PaymentMethod) => {
+    setForm({
+      method: m.method,
+      label: m.label,
+      details: m.details ?? {},
+      instructions: m.instructions ?? '',
+      is_active: m.is_active,
+      display_order: m.display_order,
+    });
+    setDetailsRaw(JSON.stringify(m.details ?? {}, null, 2));
+    setEditing(m);
+  };
+
+  const handleSave = async () => {
+    if (!form.label.trim()) { toast.error('Label is required'); return; }
+    let detailsObj: Record<string, string> = {};
+    if (detailsRaw.trim()) {
+      try {
+        const parsed = JSON.parse(detailsRaw);
+        if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+          toast.error('Details must be a JSON object'); return;
+        }
+        detailsObj = parsed as Record<string, string>;
+      } catch {
+        toast.error('Details must be valid JSON'); return;
+      }
+    }
+    try {
+      const payload = {
+        ...(editing?.id ? { id: editing.id } : {}),
+        method: form.method,
+        label: form.label.trim(),
+        details: detailsObj,
+        instructions: form.instructions.trim() || null,
+        is_active: form.is_active,
+        display_order: form.display_order,
+      };
+      const saved = await upsertPaymentMethod(payload);
+      if (editing) {
+        setMethods(methods.map((m) => (m.id === saved.id ? saved : m)));
+        toast.success('Updated');
+        setEditing(null);
+      } else {
+        setMethods([saved, ...methods]);
+        toast.success('Created');
+        setCreating(false);
+      }
+      resetForm();
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Save failed');
+    }
+  };
+
+  const handleDelete = async (m: PaymentMethod) => {
+    if (!confirm(`Delete payment method "${m.label}"?`)) return;
+    try {
+      await deletePaymentMethod(m.id);
+      setMethods(methods.filter((x) => x.id !== m.id));
+      toast.success('Deleted');
+    } catch (err: any) { toast.error(err?.message ?? 'Failed'); }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <CardTitle>Payment Methods ({methods.length})</CardTitle>
+        <Button size="sm" leftIcon={<Plus className="w-4 h-4" />} onClick={openCreate}>
+          New method
+        </Button>
+      </CardHeader>
+      <CardContent>
+        {methods.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-8 text-center">
+            No payment methods yet. Click "New method" to add one (e.g. M-Pesa paybill).
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {methods.sort((a, b) => a.display_order - b.display_order).map((m) => (
+              <div key={m.id} className="border rounded-lg p-3 flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-semibold">{m.label}</p>
+                    <span className="text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                      {m.method}
+                    </span>
+                    {!m.is_active && (
+                      <span className="text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
+                        inactive
+                      </span>
+                    )}
+                  </div>
+                  {m.instructions && (
+                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{m.instructions}</p>
+                  )}
+                  {Object.keys(m.details ?? {}).length > 0 && (
+                    <p className="text-xs text-muted-foreground mt-1 font-mono line-clamp-1">
+                      {Object.entries(m.details).map(([k, v]) => `${k}: ${v}`).join(' · ')}
+                    </p>
+                  )}
+                </div>
+                <div className="flex gap-1 flex-shrink-0">
+                  <Button size="sm" variant="outline" onClick={() => openEdit(m)} leftIcon={<Pencil className="w-3.5 h-3.5" />}>
+                    Edit
+                  </Button>
+                  <Button size="sm" variant="destructive" onClick={() => handleDelete(m)} leftIcon={<Trash2 className="w-3.5 h-3.5" />}>
+                    Delete
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+
+      {(creating || editing) && (
+        <Modal onClose={() => { setCreating(false); setEditing(null); }}
+          title={editing ? `Edit: ${editing.label}` : 'New payment method'} wide>
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium mb-1.5">Type</label>
+                <select value={form.method}
+                  onChange={(e) => setForm({ ...form, method: e.target.value as PaymentMethodType })}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                  {PAYMENT_METHOD_TYPES.map((t) => (
+                    <option key={t.value} value={t.value}>{t.label}</option>
+                  ))}
+                </select>
+              </div>
+              <Input label="Label *" value={form.label}
+                onChange={(e) => setForm({ ...form, label: e.target.value })}
+                placeholder="e.g. M-Pesa Paybill 247247" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Details (JSON object)</label>
+              <textarea value={detailsRaw} onChange={(e) => setDetailsRaw(e.target.value)}
+                rows={5}
+                placeholder={'{"paybill": "247247", "account": "Catholic Silanga"}'}
+                className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono" />
+              <p className="text-xs text-muted-foreground mt-1">
+                Key/value pairs shown to donors on the public /contributions page (e.g. paybill number, account name).
+              </p>
+            </div>
+            <Textarea label="Instructions" rows={2} value={form.instructions}
+              onChange={(e) => setForm({ ...form, instructions: e.target.value })}
+              placeholder="e.g. Use your member code as the account name" />
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Display order" type="number" value={form.display_order}
+                onChange={(e) => setForm({ ...form, display_order: Number(e.target.value) })} />
+              <label className="flex items-center gap-2 text-sm self-end pb-2">
+                <input type="checkbox" checked={form.is_active}
+                  onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
+                  className="rounded" />
+                Active (visible on public /contributions)
+              </label>
+            </div>
+            <div className="flex justify-end gap-2 pt-2 border-t">
+              <Button variant="outline" onClick={() => { setCreating(false); setEditing(null); }}>Cancel</Button>
+              <Button onClick={handleSave} leftIcon={<Save className="w-4 h-4" />}>
+                Save
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </Card>
+  );
+};
+
+// ============================================================
+// MEMBERS TAB
+// ============================================================
+const MembersTab: React.FC<{ members: Profile[] }> = ({ members }) => {
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState<Profile | null>(null);
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return members;
+    return members.filter((m) =>
+      [m.display_name, m.email, m.phone, m.hierarchy_role, m.bio]
+        .filter(Boolean).some((v) => String(v).toLowerCase().includes(q)),
+    );
+  }, [members, search]);
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <CardTitle className="flex items-center gap-2">
+          <Users className="w-5 h-5 text-primary" /> Members ({members.length})
+        </CardTitle>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by name, email, role…"
+            className="pl-9 pr-3 py-2 rounded-md border border-input bg-background text-sm w-full sm:w-72" />
+        </div>
+      </CardHeader>
+      <CardContent>
+        {members.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-8">No active members loaded.</p>
+        ) : filtered.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-8">
+            No members match "{search}".
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {filtered.map((m) => (
+              <button key={m.id} onClick={() => setSelected(m)}
+                className="text-left rounded-lg border p-3 hover:shadow-md transition-shadow bg-card">
+                <p className="font-semibold">{m.display_name}</p>
+                {m.hierarchy_role && <p className="text-xs text-primary mt-0.5">{m.hierarchy_role}</p>}
+                <p className="text-xs text-muted-foreground truncate mt-1">{m.email}</p>
+                {m.phone && <p className="text-xs text-muted-foreground">{m.phone}</p>}
+              </button>
+            ))}
+          </div>
+        )}
+      </CardContent>
+
+      {selected && (
+        <Modal title={selected.display_name} onClose={() => setSelected(null)}>
+          <div className="space-y-3 text-sm">
+            {selected.photo_url && (
+              <img src={selected.photo_url} alt={selected.display_name}
+                className="w-24 h-24 rounded-full object-cover mx-auto" />
+            )}
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground">Hierarchy position</p>
+              <p>{selected.hierarchy_role ?? 'Member'}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground">Email</p>
+              <a href={`mailto:${selected.email}`} className="text-primary hover:underline">
+                {selected.email}
+              </a>
+            </div>
+            {selected.phone && (
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground">Phone</p>
+                <a href={`tel:${selected.phone.replace(/\s/g, '')}`} className="text-primary hover:underline">
+                  {selected.phone}
+                </a>
+              </div>
+            )}
+            {selected.address && (
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground">Address</p>
+                <p className="whitespace-pre-line">{selected.address}</p>
+              </div>
+            )}
+            {selected.bio && (
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground">Bio</p>
+                <p className="whitespace-pre-line">{selected.bio}</p>
+              </div>
+            )}
+            <div className="pt-2 border-t flex gap-2 justify-end">
+              {selected.email && (
+                <Button size="sm" variant="outline" leftIcon={<Send className="w-3 h-3" />}
+                  onClick={() => window.location.href = `mailto:${selected.email}`}>
+                  Email
+                </Button>
+              )}
+              {selected.phone && (
+                <Button size="sm" variant="primary"
+                  onClick={() => window.location.href = `tel:${selected.phone!.replace(/\s/g, '')}`}>
+                  Call
+                </Button>
+              )}
+            </div>
+          </div>
+        </Modal>
+      )}
+    </Card>
+  );
+};
+
+// ============================================================
+// REPORTS TAB — preview before submit
+// ============================================================
 const ReportsTab: React.FC<{
   reports: FinancialReport[];
   setReports: (r: FinancialReport[]) => void;
@@ -671,22 +1380,56 @@ const ReportsTab: React.FC<{
     period_end: new Date().toISOString().slice(0, 10),
     notes: '',
   });
+  const [preview, setPreview] = useState<null | {
+    opening_balance: number; income_from_donations: number; income_from_fines: number;
+    total_income: number; total_expenses: number; closing_balance: number;
+    donation_count: number; fine_count: number; expense_count: number;
+  }>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [viewing, setViewing] = useState<FinancialReport | null>(null);
 
-  const handleGenerate = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handlePreview = async () => {
+    try {
+      const { data, error } = await supabase.rpc('get_financial_summary_preview', {
+        p_period_start: form.period_start,
+        p_period_end: form.period_end,
+      });
+      if (error) throw error;
+      const row = Array.isArray(data) ? data[0] : data;
+      if (!row) { toast.error('No data for this period'); return; }
+      setPreview({
+        opening_balance: Number(row.opening_balance ?? 0),
+        income_from_donations: Number(row.income_from_donations ?? 0),
+        income_from_fines: Number(row.income_from_fines ?? 0),
+        total_income: Number(row.total_income ?? 0),
+        total_expenses: Number(row.total_expenses ?? 0),
+        closing_balance: Number(row.closing_balance ?? 0),
+        donation_count: Number(row.donation_count ?? 0),
+        fine_count: Number(row.fine_count ?? 0),
+        expense_count: Number(row.expense_count ?? 0),
+      });
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Preview failed');
+    }
+  };
+
+  const handleConfirmSubmit = async () => {
+    setSubmitting(true);
     try {
       const created = await submitFinancialReport(form.period_start, form.period_end, form.notes);
       setReports([created, ...reports]);
-      toast.success('Report generated');
+      toast.success('Report generated and saved');
       setShowForm(false);
+      setPreview(null);
       setForm({
         period_start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
         period_end: new Date().toISOString().slice(0, 10),
         notes: '',
       });
     } catch (err: any) {
-      toast.error(err?.message ?? 'Failed');
+      toast.error(err?.message ?? 'Submit failed');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -695,9 +1438,7 @@ const ReportsTab: React.FC<{
       const updated = await approveFinancialReport(r.id);
       setReports(reports.map((x) => (x.id === updated.id ? updated : x)));
       toast.success('Report approved');
-    } catch (err: any) {
-      toast.error(err?.message ?? 'Failed');
-    }
+    } catch (err: any) { toast.error(err?.message ?? 'Failed'); }
   };
 
   return (
@@ -705,13 +1446,13 @@ const ReportsTab: React.FC<{
       <CardHeader className="flex flex-row justify-between items-center flex-wrap gap-2">
         <CardTitle>Financial Reports ({reports.length})</CardTitle>
         <Button size="sm" leftIcon={<Plus className="w-4 h-4" />}
-          onClick={() => setShowForm(!showForm)}>
+          onClick={() => { setShowForm(!showForm); setPreview(null); }}>
           {showForm ? 'Cancel' : 'Generate Report'}
         </Button>
       </CardHeader>
       <CardContent>
         {showForm && (
-          <form onSubmit={handleGenerate} className="space-y-3 border-b pb-4 mb-4">
+          <div className="space-y-3 border-b pb-4 mb-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Input label="Period start *" required type="date" value={form.period_start}
                 onChange={(e) => setForm((f) => ({ ...f, period_start: e.target.value }))} />
@@ -720,8 +1461,38 @@ const ReportsTab: React.FC<{
             </div>
             <Textarea label="Notes (optional)" rows={2} value={form.notes}
               onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
-            <Button type="submit" leftIcon={<Save className="w-4 h-4" />}>Generate</Button>
-          </form>
+            <div className="flex gap-2 justify-end">
+              <Button onClick={handlePreview} leftIcon={<BarChart3 className="w-4 h-4" />}>
+                Preview summary
+              </Button>
+            </div>
+
+            {preview && (
+              <div className="rounded-lg border-2 border-primary bg-primary/5 p-4 space-y-3 mt-2">
+                <p className="font-semibold text-sm flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-primary" /> Preview — confirm or revisit
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Saving will create a financial report with these exact numbers. Paid fines are included in total income.
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+                  <PreviewStat label="Opening balance" value={fmtMoney(preview.opening_balance)} />
+                  <PreviewStat label="Income from donations" value={`${fmtMoney(preview.income_from_donations)} (${preview.donation_count})`} />
+                  <PreviewStat label="Income from paid fines" value={`${fmtMoney(preview.income_from_fines)} (${preview.fine_count})`} />
+                  <PreviewStat label="Total income" value={fmtMoney(preview.total_income)} tone="success" />
+                  <PreviewStat label="Total expenses" value={`${fmtMoney(preview.total_expenses)} (${preview.expense_count})`} tone="destructive" />
+                  <PreviewStat label="Closing balance" value={fmtMoney(preview.closing_balance)} tone={preview.closing_balance >= 0 ? 'success' : 'destructive'} bold />
+                </div>
+                <div className="flex justify-end gap-2 pt-2 border-t">
+                  <Button variant="outline" onClick={() => setPreview(null)}>Revisit</Button>
+                  <Button onClick={handleConfirmSubmit} isLoading={submitting}
+                    disabled={submitting} leftIcon={<CheckCircle className="w-4 h-4" />}>
+                    Confirm and save report
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
         )}
 
         {reports.length === 0 ? (
@@ -822,6 +1593,19 @@ const ReportsTab: React.FC<{
   );
 };
 
+// Small helper for the preview stats
+const PreviewStat: React.FC<{ label: string; value: string; tone?: 'success' | 'destructive'; bold?: boolean }> = ({ label, value, tone, bold }) => (
+  <div>
+    <p className="text-xs text-muted-foreground">{label}</p>
+    <p className={`font-mono ${bold ? 'text-base font-bold' : ''} ${
+      tone === 'success' ? 'text-success' :
+      tone === 'destructive' ? 'text-destructive' : ''
+    }`}>{value}</p>
+  </div>
+);
+
+// ============================================================
+// ANALYTICS TAB
 // ============================================================
 const AnalyticsTab: React.FC<{
   monthly: Array<{ month: string; income: number; expenses: number }>;
@@ -841,7 +1625,7 @@ const AnalyticsTab: React.FC<{
   return (
     <div className="space-y-6">
       <Card>
-        <CardHeader><CardTitle>Income vs Expenses — last 12 months</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Income (incl. paid fines) vs Expenses — last 12 months</CardTitle></CardHeader>
         <CardContent>
           <ResponsiveContainer width="100%" height={320}>
             <BarChart data={monthly}>
@@ -850,7 +1634,7 @@ const AnalyticsTab: React.FC<{
               <YAxis tick={{ fontSize: 11 }} />
               <Tooltip formatter={(v) => fmtMoney(Number(v))} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Bar dataKey="income" name="Income" fill="#15803d" radius={[6, 6, 0, 0]} />
+              <Bar dataKey="income" name="Income (donations + paid fines)" fill="#15803d" radius={[6, 6, 0, 0]} />
               <Bar dataKey="expenses" name="Expenses" fill="#a82524" radius={[6, 6, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
@@ -880,14 +1664,16 @@ const AnalyticsTab: React.FC<{
         <CardHeader><CardTitle>Summary</CardTitle></CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            <StatCard label="Total income" value={fmtMoney(totalIncome)} icon={Heart} color="text-success" />
+            <StatCard label="Total income (incl. fines)" value={fmtMoney(totalIncome)} icon={Heart} color="text-success" />
             <StatCard label="Total expenses" value={fmtMoney(totalExpenses)} icon={Receipt} color="text-destructive" />
-            <StatCard label="Total expense records" value={expenses.length} icon={Receipt} color="text-muted-foreground" />
+            <StatCard label="Total expense records" value={String(expenses.length)} icon={Receipt} color="text-muted-foreground" />
           </div>
         </CardContent>
       </Card>
     </div>
   );
 };
+
+// ============================================================
 
 export default TreasurerPortal;

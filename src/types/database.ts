@@ -530,3 +530,74 @@ export interface FineStats {
   paid_count: number;
   waived_count: number;
 }
+
+
+// ---------- v11 — Financial Record Summaries (Treasurer "Create Record") ----------
+
+/** Categories the Treasurer can include in a financial record snapshot. */
+export type FinancialRecordCategory =
+  | 'donations'
+  | 'expenses'
+  | 'fines_paid'
+  | 'fines_unpaid'
+  | 'fines_waived';
+
+/** One line in the per-category breakdown shown on the public detail page. */
+export interface FinancialRecordLine {
+  category: FinancialRecordCategory;
+  label: string;
+  amount: number;
+  count: number;
+}
+
+/**
+ * Result of `preview_financial_summary(...)` — totals for a date range
+ * BEFORE persisting. Used by the Create-Record wizard's preview panel.
+ */
+export interface FinancialRecordPreview {
+  period_start: string;
+  period_end: string;
+  total_donations: number;
+  donation_count: number;
+  total_expenses: number;
+  expense_count: number;
+  total_fines_paid: number;
+  fines_paid_count: number;
+  total_fines_unpaid: number;
+  fines_unpaid_count: number;
+  total_fines_waived: number;
+  fines_waived_count: number;
+  total_income: number;
+  net_position: number;
+  lines: FinancialRecordLine[];
+  included_categories: FinancialRecordCategory[];
+}
+
+/** A persisted, optionally published, financial record snapshot. */
+export interface FinancialRecordSummary {
+  id: string;
+  title: string;
+  period_start: string;
+  period_end: string;
+  total_donations: number;
+  donation_count: number;
+  total_expenses: number;
+  expense_count: number;
+  total_fines_paid: number;
+  fines_paid_count: number;
+  total_fines_unpaid: number;
+  fines_unpaid_count: number;
+  total_fines_waived: number;
+  fines_waived_count: number;
+  total_income: number;
+  net_position: number;
+  lines: FinancialRecordLine[];
+  included_categories: FinancialRecordCategory[];
+  notes: string | null;
+  status: 'draft' | 'published';
+  created_by: string | null;
+  published_by: string | null;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+}

@@ -12,6 +12,7 @@ import { ContactPage } from './pages/ContactPage';
 import { MembersPage } from './pages/MembersPage';
 import { ContributionsPage } from './pages/ContributionsPage';
 import { FinanceOverviewPage } from './pages/FinanceOverviewPage';
+import { FinancialRecordDetailPage } from './pages/FinancialRecordDetailPage';
 import { TermsPage } from './pages/TermsPage';
 import { MeetingsPage } from './pages/MeetingsPage';
 import { MeetingProceedingsPage } from './pages/MeetingProceedingsPage';
@@ -45,6 +46,10 @@ function App() {
               <Route path="/members" element={<MembersPage />} />
               <Route path="/contributions" element={<ContributionsPage />} />
               <Route path="/finance" element={<FinanceOverviewPage />} />
+              <Route
+                path="/finance/:id"
+                element={<FinancialRecordDetailPage />}
+              />
               <Route path="/terms" element={<TermsPage />} />
               <Route
                 path="/meetings"
