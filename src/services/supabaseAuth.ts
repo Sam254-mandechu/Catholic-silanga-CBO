@@ -503,15 +503,72 @@ export async function suspendMember(
     .from('profiles')
     .update({ status: 'suspended', updated_at: new Date().toISOString() })
     .eq('id', target_user_id)
-    .select('*')
-    .single();
-  if (error) throw toAppError(error);
-  return data as Profile;
-}
+        .select('*')
+        .single();
+      if (error) throw toAppError(error);
+        return data as Profile;
+      }
 
-// ---------- Helpers ----------
+      /**
+       * v11 — moderator/admin: re-activate a suspended member. Calls the
+       * SECURITY DEFINER RPC `unsuspend_member(uuid, text)` so the role guard
+       * + notification fan-out happen server-side. Falls back to a direct
+       * UPDATE if the RPC isn't installed.
+       */
+      export async function unsuspendMember(
+        target_user_id: string,
+        reason: string | null = null,
+      ): Promise<Profile> {
+        try {
+          const { data, error } = await supabase.rpc('unsuspend_member', {
+            target_user_id,
+            p_reason: reason,
+          });
+          if (!error && data) return data as Profile;
+          if (error && !/does not exist/i.test(error.message)) throw toAppError(error);
+        } catch (err: any) {
+          if (!/does not exist/i.test(err?.message ?? '')) throw err;
+        }
+        // Fallback: direct update
+        const { data, error } = await supabase
+          .from('profiles')
+          .update({ status: 'active', updated_at: new Date().toISOString() })
+          .eq('id', target_user_id)
+          .select('*')
+          .single();
+        if (error) throw toAppError(error);
+        return data as Profile;
+      }
 
-function toAppError(err: any): AuthError {
+      /**
+       * v11 — moderator/admin: list all members, optionally filtered by status.
+       * Uses the SECURITY DEFINER RPC `admin_list_members(text)` so the order is
+       * consistent (pending → active → suspended). Falls back to a direct query
+       * if the RPC isn't installed.
+       */
+      export async function adminListAllMembers(
+        status?: 'pending' | 'active' | 'suspended',
+      ): Promise<Profile[]> {
+        try {
+          const { data, error } = await supabase.rpc('admin_list_members', {
+            p_status: status ?? null,
+          });
+          if (!error && data) return (data ?? []) as Profile[];
+          if (error && !/does not exist/i.test(error.message)) throw toAppError(error);
+        } catch (err: any) {
+          if (!/does not exist/i.test(err?.message ?? '')) throw err;
+        }
+        // Fallback: direct query
+        let q = supabase.from('profiles').select('*').order('joined_at', { ascending: false });
+        if (status) q = q.eq('status', status);
+        const { data, error } = await q;
+        if (error) throw toAppError(error);
+        return (data ?? []) as Profile[];
+      }
+
+      // ---------- Helpers ----------
+
+      function toAppError(err: any): AuthError {
   const e: AuthError = new Error(err?.message ?? 'Unexpected authentication error');
   e.status = err?.status;
   ;(e as any).raw = err;

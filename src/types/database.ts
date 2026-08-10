@@ -164,6 +164,8 @@ export interface Announcement {
   priority: AnnouncementPriority;
   published_at: string;
   expires_at: string | null;
+  /** v11 — who posted this announcement (used for edit history + audit). */
+  created_by: string | null;
 }
 
 // ---------- v2: Tasks ----------

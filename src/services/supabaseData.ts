@@ -8,6 +8,7 @@ import type {
   ContactSubmission,
   Donation,
   Announcement,
+  AnnouncementPriority,
   ProjectStatus,
   Task,
   TaskStatus,
@@ -343,11 +344,15 @@ export async function getAnnouncements(): Promise<Announcement[]> {
   return (data ?? []) as Announcement[];
 }
 export async function addAnnouncement(
-  input: Omit<Announcement, 'id' | 'published_at'>,
+  input: Omit<Announcement, 'id' | 'published_at' | 'created_by'> & { created_by?: string | null },
 ): Promise<Announcement> {
+  // v11: stamp created_by to the current user if not explicitly set
+  const { data: { user } } = await supabase.auth.getUser();
+  const created_by = input.created_by ?? user?.id ?? null;
+
   const { data, error } = await supabase
     .from('announcements')
-    .insert({ ...input, published_at: new Date().toISOString() })
+    .insert({ ...input, created_by, published_at: new Date().toISOString() })
     .select('*')
     .single();
   if (error) throw error;
@@ -370,6 +375,43 @@ export async function addAnnouncement(
 export async function deleteAnnouncement(id: string): Promise<void> {
   const { error } = await supabase.from('announcements').delete().eq('id', id);
   if (error) throw error;
+}
+
+/**
+ * v11 — moderator/admin: edit any announcement. Uses the SECURITY DEFINER
+ * RPC `update_announcement(uuid, jsonb)` so the role check + audit is on
+ * the server. Falls back to a direct UPDATE if the RPC isn't installed.
+ */
+export async function updateAnnouncement(
+  id: string,
+  patch: { title?: string; content?: string; priority?: AnnouncementPriority; expires_at?: string | null },
+): Promise<Announcement> {
+  try {
+    const { data, error } = await supabase.rpc('update_announcement', {
+      p_announcement_id: id,
+      p_patch: patch,
+    });
+    if (!error && data) return data as Announcement;
+    if (error && !/does not exist/i.test(error.message)) throw error;
+  } catch (err: any) {
+    if (!/does not exist/i.test(err?.message ?? '')) throw err;
+  }
+  // Fallback: direct update
+  const updates: Record<string, unknown> = {};
+  if (patch.title !== undefined) updates.title = patch.title;
+  if (patch.content !== undefined) updates.content = patch.content;
+  if (patch.priority !== undefined) updates.priority = patch.priority;
+  if (patch.expires_at !== undefined) {
+    updates.expires_at = patch.expires_at === '' ? null : patch.expires_at;
+  }
+  const { data, error } = await supabase
+    .from('announcements')
+    .update(updates)
+    .eq('id', id)
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data as Announcement;
 }
 
 // =====================================================================
