@@ -478,15 +478,25 @@ export interface SiteContentRow {
 }
 
 // ---------- v7: Notifications ----------
+// (v14 — added 7 kinds for the comprehensive notification system:
+//  task_published, news_posted, meeting_scheduled, rsvp_submitted,
+//  poll_vote, donation_submitted, record_published)
 export type NotificationKind =
   | 'task_assigned'
   | 'task_updated'
   | 'task_completed'
+  | 'task_published'
   | 'role_changed'
   | 'contribution_submitted'
   | 'contribution_verified'
   | 'contribution_rejected'
+  | 'donation_submitted'
   | 'announcement_posted'
+  | 'news_posted'
+  | 'meeting_scheduled'
+  | 'rsvp_submitted'
+  | 'poll_vote'
+  | 'record_published'
   | 'mention'
   | 'system';
 

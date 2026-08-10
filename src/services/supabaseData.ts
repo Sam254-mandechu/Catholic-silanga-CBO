@@ -110,6 +110,16 @@ export async function getNewsItem(id: string): Promise<News | null> {
 export async function addNews(input: Omit<News, 'id' | 'created_at' | 'updated_at' | 'author_id'>): Promise<News> {
   const { data, error } = await supabase.from('news').insert(input).select('*').single();
   if (error) throw error;
+  // v14 — broadcast to every active member if published immediately.
+  if (data?.published) {
+    notifyAllMembers({
+      kind: 'news_posted',
+      title: '📰 New article',
+      message: data.title,
+      link: `/news/${data.id}`,
+      payload: { news_id: data.id, category: data.category ?? null },
+    }).catch((err) => console.warn('[addNews] notify_all_members failed', err));
+  }
   return data as News;
 }
 export async function deleteNews(id: string): Promise<void> {
@@ -457,6 +467,26 @@ export async function addTask(input: Omit<Task, 'id' | 'created_at' | 'updated_a
     }
   } catch (err) {
     console.warn('Task notification fan-out failed:', err);
+  }
+
+  // v14 — broadcast "task_published" to every system role so admin/moderator/secretary/treasurer
+  // portals see the new task in their bell. Excludes the actor and the assignee (already notified).
+  try {
+    const roles: Array<'admin' | 'moderator' | 'secretary' | 'treasurer'> = ['admin', 'moderator', 'secretary', 'treasurer'];
+    for (const role of roles) {
+      await notifyRoleMembers({
+        target_role: role,
+        kind: 'task_published',
+        title: '📋 New task published',
+        message: `"${input.title}" (${input.priority})`,
+        link: role === 'treasurer' ? '/treasurer-portal' : `/${role}-portal`,
+        payload: { task_id: data.id, priority: input.priority },
+        actor_id: user?.id ?? null,
+        exclude_user_id: input.assignee_id ?? null,
+      });
+    }
+  } catch (err) {
+    console.warn('[addTask] task_published fan-out failed:', err);
   }
 
   return data as Task;
@@ -955,13 +985,55 @@ export async function deletePoll(id: string): Promise<void> {
   if (error) throw error;
 }
 
+/** Result row for a single poll option. */
+export interface PollResultRow {
+  option: PollOption;
+  votes: number;
+  is_winner: boolean;
+}
+
 /**
  * Vote counts per option for a poll. Returns the option alongside its
  * vote tally — sorted by display_order so the UI doesn't need to re-sort.
+ * v14 — routes through `get_poll_results(p_poll_id)` RPC when available
+ * (which uses server-side aggregation + tie-aware `is_winner`); falls back
+ * to a client-side tally computed from `poll_options` + `poll_votes`.
+ * Flags the leading option(s) with `is_winner` (handles ties).
  */
 export async function getPollResults(
   poll_id: string,
-): Promise<{ option: PollOption; votes: number }[]> {
+): Promise<{ option: PollOption; votes: number; is_winner: boolean }[]> {
+  // v14 — try the new RPC first (server-aggregated, returns option_id/label/vote_count/is_winner).
+  try {
+    const { data, error } = await supabase.rpc('get_poll_results', { p_poll_id: poll_id });
+    if (!error && data) {
+      // RPC returns: { option_id, option_label, display_order, vote_count, is_winner }
+      // We need to map back to { option, votes, is_winner } — re-fetch options for full PollOption.
+      const ids = (data as any[]).map((r: any) => r.option_id);
+      if (ids.length > 0) {
+        const { data: opts } = await supabase
+          .from('poll_options')
+          .select('*')
+          .in('id', ids);
+        const optMap = new Map(((opts ?? []) as PollOption[]).map((o) => [o.id, o]));
+        return (data as any[]).map((r: any) => ({
+          option: optMap.get(r.option_id) ?? {
+            id: r.option_id,
+            poll_id,
+            label: r.option_label,
+            display_order: r.display_order ?? 0,
+          } as PollOption,
+          votes: Number(r.vote_count ?? 0),
+          is_winner: !!r.is_winner,
+        }));
+      }
+      return [];
+    }
+    if (error && !/does not exist/i.test(error.message)) throw error;
+  } catch (err: any) {
+    if (!/does not exist/i.test(err?.message ?? '')) throw err;
+  }
+  // Fallback: compute counts client-side from poll_options + poll_votes.
   const [{ data: options, error: optErr }, { data: votes, error: voteErr }] = await Promise.all([
     supabase.from('poll_options').select('*').eq('poll_id', poll_id).order('display_order', { ascending: true }),
     supabase.from('poll_votes').select('option_id').eq('poll_id', poll_id),
@@ -973,10 +1045,16 @@ export async function getPollResults(
   for (const v of votes ?? []) {
     tally.set(v.option_id, (tally.get(v.option_id) ?? 0) + 1);
   }
-  return ((options ?? []) as PollOption[]).map((option) => ({
+  const list = ((options ?? []) as PollOption[]).map((option) => ({
     option,
     votes: tally.get(option.id) ?? 0,
+    is_winner: false as boolean,
   }));
+  const max = list.reduce((m, r) => Math.max(m, r.votes), 0);
+  if (max > 0) {
+    return list.map((r) => ({ ...r, is_winner: r.votes === max }));
+  }
+  return list;
 }
 
 /**
@@ -1422,6 +1500,117 @@ export async function markNotificationsRead(ids: string[]): Promise<number> {
 
 
 // =====================================================================
+// v14 — COMPREHENSIVE NOTIFICATIONS (7 new kinds)
+// =====================================================================
+
+/**
+ * Insert a notification into every active member of a given role
+ * (e.g. 'admin', 'moderator', 'secretary', 'treasurer').
+ * Routes through the secure RPC `notify_role_members(...)` introduced in v14.
+ * Returns the number of rows inserted.
+ */
+export async function notifyRoleMembers(input: {
+  target_role: 'admin' | 'moderator' | 'secretary' | 'treasurer' | 'member';
+  kind: NotificationKind;
+  title: string;
+  message: string;
+  link?: string | null;
+  payload?: Record<string, unknown> | null;
+  actor_id?: string | null;
+  exclude_user_id?: string | null;
+}): Promise<number> {
+  try {
+    const { data, error } = await supabase.rpc('notify_role_members', {
+      p_target_role: input.target_role,
+      p_kind: input.kind,
+      p_title: input.title,
+      p_message: input.message,
+      p_link: input.link ?? null,
+      p_payload: input.payload ?? null,
+      p_actor: input.actor_id ?? null,
+      p_exclude_user_id: input.exclude_user_id ?? null,
+    });
+    if (!error) return (data ?? 0) as number;
+    if (!/does not exist/i.test(error.message)) throw error;
+  } catch (err: any) {
+    if (!/does not exist/i.test(err?.message ?? '')) throw err;
+  }
+  // Fallback: fan out manually (works with the existing "Notifications insert-by-authenticated" policy)
+  let q = supabase
+    .from('profiles')
+    .select('id')
+    .eq('status', 'active')
+    .eq('role', input.target_role);
+  if (input.exclude_user_id) q = q.neq('id', input.exclude_user_id);
+  const { data: targets } = await q;
+  if (!targets || targets.length === 0) return 0;
+  const rows = targets.map((m) => ({
+    recipient_id: m.id,
+    actor_id: input.actor_id ?? null,
+    kind: input.kind,
+    title: input.title,
+    message: input.message,
+    link: input.link ?? null,
+    payload: input.payload ?? null,
+  }));
+  const { error } = await supabase.from('notifications').insert(rows);
+  if (error) throw error;
+  return rows.length;
+}
+
+/**
+ * Insert a notification into every active member of the CBO.
+ * Used for site-wide events (news posted, meeting scheduled, record published).
+ * Routes through the secure RPC `notify_all_members(...)` introduced in v14.
+ */
+export async function notifyAllMembers(input: {
+  kind: NotificationKind;
+  title: string;
+  message: string;
+  link?: string | null;
+  payload?: Record<string, unknown> | null;
+  actor_id?: string | null;
+  exclude_user_id?: string | null;
+}): Promise<number> {
+  try {
+    const { data, error } = await supabase.rpc('notify_all_members', {
+      p_kind: input.kind,
+      p_title: input.title,
+      p_message: input.message,
+      p_link: input.link ?? null,
+      p_payload: input.payload ?? null,
+      p_actor: input.actor_id ?? null,
+      p_exclude_user_id: input.exclude_user_id ?? null,
+    });
+    if (!error) return (data ?? 0) as number;
+    if (!/does not exist/i.test(error.message)) throw error;
+  } catch (err: any) {
+    if (!/does not exist/i.test(err?.message ?? '')) throw err;
+  }
+  // Fallback: fan out manually.
+  let q = supabase.from('profiles').select('id').eq('status', 'active');
+  if (input.exclude_user_id) q = q.neq('id', input.exclude_user_id);
+  const { data: targets } = await q;
+  if (!targets || targets.length === 0) return 0;
+  const rows = targets.map((m) => ({
+    recipient_id: m.id,
+    actor_id: input.actor_id ?? null,
+    kind: input.kind,
+    title: input.title,
+    message: input.message,
+    link: input.link ?? null,
+    payload: input.payload ?? null,
+  }));
+  const { error } = await supabase.from('notifications').insert(rows);
+  if (error) throw error;
+  return rows.length;
+}
+
+/** Result row for a single poll option. */
+// (v14 — the canonical getPollResults definition is up near line 993; see PollResultRow there.)
+
+
+// =====================================================================
 // v9 — FINES + TREASURER MANUAL ENTRY
 // =====================================================================
 
@@ -1648,6 +1837,16 @@ export async function createFinancialRecordSummary(input: {
     p_notes: input.notes ?? null,
   });
   if (error) throw error;
+  // v14 — broadcast to all active members if the record is published.
+  if ((data as FinancialRecordSummary)?.status === 'published') {
+    notifyAllMembers({
+      kind: 'record_published',
+      title: '📊 New financial record published',
+      message: input.title,
+      link: `/finance/${(data as FinancialRecordSummary).id}`,
+      payload: { record_id: (data as FinancialRecordSummary).id },
+    }).catch((err) => console.warn('[createFinancialRecordSummary] notify_all_members failed', err));
+  }
   return data as FinancialRecordSummary;
 }
 

@@ -1328,7 +1328,7 @@ const PollsTab: React.FC<{
     options: ['', ''],
   });
   const [resultsPoll, setResultsPoll] = useState<Poll | null>(null);
-  const [results, setResults] = useState<{ option: PollOption; votes: number }[]>([]);
+  const [results, setResults] = useState<{ option: PollOption; votes: number; is_winner: boolean }[]>([]);
 
   const openResults = async (p: Poll) => {
     setResultsPoll(p);
@@ -1539,17 +1539,49 @@ const PollsTab: React.FC<{
             {results.length === 0 ? (
               <p className="text-sm text-muted-foreground">No votes yet.</p>
             ) : (
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={results.map((r) => ({ name: r.option.label, votes: r.votes }))}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(125,125,125,0.2)" />
-                  <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                  <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
-                  <Tooltip />
-                  <Bar dataKey="votes" radius={[6, 6, 0, 0]}>
-                    {results.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+              <>
+                {/* v14 — textual breakdown with winner badge (uses is_winner from get_poll_results) */}
+                <div className="space-y-1 mb-4">
+                  {(() => {
+                    const total = results.reduce((sum, r) => sum + r.votes, 0);
+                    return results
+                      .slice()
+                      .sort((a, b) => b.votes - a.votes)
+                      .map((r) => {
+                        const pct = total === 0 ? 0 : Math.round((r.votes / total) * 100);
+                        return (
+                          <div
+                            key={r.option.id}
+                            className="flex items-center justify-between rounded-md border bg-card px-3 py-2"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{r.option.label}</span>
+                              {r.is_winner && (
+                                <span className="inline-flex items-center rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-semibold text-yellow-800">
+                                  🏆 Winner
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              {r.votes} {r.votes === 1 ? 'vote' : 'votes'} · {pct}%
+                            </div>
+                          </div>
+                        );
+                      });
+                  })()}
+                </div>
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={results.map((r) => ({ name: r.option.label, votes: r.votes }))}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(125,125,125,0.2)" />
+                    <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                    <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
+                    <Tooltip />
+                    <Bar dataKey="votes" radius={[6, 6, 0, 0]}>
+                      {results.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </>
             )}
           </div>
         </Modal>
