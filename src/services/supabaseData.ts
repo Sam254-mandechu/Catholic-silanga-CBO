@@ -647,10 +647,11 @@ export async function submitMeetingRsvp(
   response: MeetingRsvp['response'],
   reason?: string,
 ): Promise<MeetingRsvp> {
+  // RPC parameter names in Postgres are p_-prefixed.
   const { error } = await supabase.rpc('submit_meeting_rsvp', {
-    meeting_id,
-    response,
-    reason: reason ?? null,
+    p_meeting_id: meeting_id,
+    p_response: response,
+    p_reason: reason ?? null,
   });
   if (error) throw error;
   // RPC doesn't return the row, so we re-fetch the caller's RSVP.
@@ -702,10 +703,12 @@ export async function markMeetingAttendance(
   member_id: string,
   status: MeetingAttendance['status'],
 ): Promise<MeetingAttendance> {
+  // RPC parameter names in Postgres are p_-prefixed. PostgREST binds by name,
+  // so we have to pass the prefixed keys here.
   const { error } = await supabase.rpc('mark_meeting_attendance', {
-    meeting_id,
-    member_id,
-    status,
+    p_meeting_id: meeting_id,
+    p_member_id: member_id,
+    p_status: status,
   });
   if (error) throw error;
   const { data, error: fetchErr } = await supabase
