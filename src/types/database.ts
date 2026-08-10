@@ -598,6 +598,29 @@ export interface FinancialRecordSummary {
   created_by: string | null;
   published_by: string | null;
   published_at: string | null;
-  created_at: string;
-  updated_at: string;
-}
+    created_at: string;
+    updated_at: string;
+  }
+
+
+  // ---------- v13 — Administration (auto-generated leadership) ----------
+
+  /** Row from public.list_administration() — verified management roster. */
+  export interface AdministrationMember {
+    id: string;
+    display_name: string;
+    photo_url: string | null;
+    hierarchy_role: string | null;
+    role: Role;
+    email: string;
+    joined_at: string;
+  }
+
+  /** Friendly labels for the role badges on /leadership. */
+  export const ROLE_LABEL: Record<Role, string> = {
+    admin: 'Coordinator',
+    moderator: 'Moderator',
+    secretary: 'Secretary',
+    treasurer: 'Treasurer',
+    member: 'Member',
+  };

@@ -41,6 +41,8 @@ import type {
     // v11 — financial record summaries
     FinancialRecordSummary,
     FinancialRecordPreview,
+    // v13 — administration roster
+    AdministrationMember,
   } from '../types/database';
 
 // =====================================================================
@@ -1666,4 +1668,21 @@ export async function getFinancialRecordSummary(
   });
   if (error) throw error;
   return (data as FinancialRecordSummary) ?? null;
+}
+
+
+// =====================================================================
+// v13 — Administration (auto-generated leadership roster)
+// =====================================================================
+
+/**
+ * Fetch all profiles whose role is in (admin, moderator, secretary,
+ * treasurer) AND status='active'. Used by the public /leadership page
+ * to auto-show the verified administration. Sorted by role hierarchy
+ * then name.
+ */
+export async function listAdministration(): Promise<AdministrationMember[]> {
+  const { data, error } = await supabase.rpc('list_administration');
+  if (error) throw error;
+  return (data ?? []) as AdministrationMember[];
 }

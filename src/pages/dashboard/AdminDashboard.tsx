@@ -61,8 +61,9 @@ type Tab =
   | 'payment-methods' | 'announcements' | 'analytics' | 'roles'
   | 'meetings' | 'polls' | 'financial' | 'site-content';
 
-/** System roles an admin can assign on the profiles.role column. */
-const SYSTEM_ROLES: Role[] = ['member', 'moderator', 'secretary', 'treasurer', 'admin'];
+/** Roles an admin can assign to others. Admin is excluded — only the
+ *  single admin can hold it, and transfers happen via a dedicated flow. */
+const ASSIGNABLE_ROLES: Role[] = ['member', 'moderator', 'secretary', 'treasurer'];
 
 /** Friendly labels for the system role select. */
 const SYSTEM_ROLE_LABELS: Record<Role, string> = {
@@ -727,17 +728,20 @@ const MembersTab: React.FC<{
                   </td>
                   <td className="py-3">
                     <select
-                      value={m.role}
-                      onChange={(e) => handleSystemRoleChange(m.id, e.target.value as Role)}
-                      title={m.status !== 'active'
-                        ? 'Granting treasurer/secretary/moderator auto-activates the account'
-                        : undefined}
-                      className="text-xs rounded border-input bg-background px-2 py-1 border"
-                    >
-                      {SYSTEM_ROLES.map((r) => (
-                        <option key={r} value={r}>{SYSTEM_ROLE_LABELS[r]}</option>
-                      ))}
-                    </select>
+                                          value={m.role}
+                                          onChange={(e) => handleSystemRoleChange(m.id, e.target.value as Role)}
+                                          title={m.status !== 'active'
+                                            ? 'Granting treasurer/secretary/moderator auto-activates the account'
+                                            : undefined}
+                                          className="text-xs rounded border-input bg-background px-2 py-1 border"
+                                        >
+                                          {/* Show current role even if it's admin (read-only), but only
+                                              allow assigning the assignable roles from the dropdown */}
+                                          <option value={m.role}>{SYSTEM_ROLE_LABELS[m.role]}{m.role === 'admin' ? ' (only one)' : ''}</option>
+                                          {ASSIGNABLE_ROLES.filter((r) => r !== m.role).map((r) => (
+                                            <option key={r} value={r}>{SYSTEM_ROLE_LABELS[r]}</option>
+                                          ))}
+                                        </select>
                   </td>
                   <td className="py-3">
                     <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
@@ -813,11 +817,16 @@ const MembersTab: React.FC<{
                                 </div>
                               </div>
 
-                              <Input
-                                label="Display Name *"
-                                value={editForm.display_name}
-                                onChange={(e) => setEditForm((f) => ({ ...f, display_name: e.target.value }))}
-                              />
+                              <div>
+                                                              <Input
+                                                                label="Display Name"
+                                                                value={editForm.display_name}
+                                                                disabled
+                                                              />
+                                                              <p className="text-xs text-muted-foreground mt-1">
+                                                                Display name is personal — the member must update this themselves.
+                                                              </p>
+                                                            </div>
 
                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 <Input
