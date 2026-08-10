@@ -69,6 +69,40 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   }, [session?.user?.id]);
 
+  // Live-refresh the current user's profile whenever their row changes
+  // (photo upload, display name change, role change, etc.). This makes the
+  // navbar avatar, MemberDashboard header, and any other surface reading
+  // `profile.photo_url` update instantly across all open tabs — like
+  // Facebook/Instagram profile picture propagation.
+  useEffect(() => {
+    const userId = session?.user?.id;
+    if (!userId) return;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    try {
+      channel = supabase
+        .channel(`profile_self_${userId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'profiles',
+            filter: `id=eq.${userId}`,
+          },
+          (payload) => {
+            const next = payload.new as Profile | null;
+            if (next) setProfile(next);
+          },
+        )
+        .subscribe();
+    } catch (err) {
+      console.warn('AuthContext: profile realtime subscribe failed', err);
+    }
+    return () => {
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [session?.user?.id]);
+
   const loadProfileFor = useCallback(async (userId: string, email: string | null | undefined) => {
     let p = await getProfile(userId);
     if (p && email && isAdminEmail(email)) {

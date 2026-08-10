@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Menu, X, Moon, Sun, User, LogOut, LayoutDashboard, ShieldCheck } from 'lucide-react';
 import { Logo } from '../common/Logo';
 import { Button } from '../ui/Button';
+import { Avatar } from '../common/Avatar';
 import { useDarkMode } from '../../hooks/useDarkMode';
 import { useAuth } from '../../contexts/AuthContext';
 import { ADMIN_EMAILS } from '../../config/adminConfig';
@@ -120,9 +121,13 @@ export const Navbar: React.FC = () => {
                   onClick={() => setShowProfileMenu(!showProfileMenu)}
                   className="flex items-center gap-2 p-1.5 pr-3 rounded-md hover:bg-primary/5 transition-colors"
                 >
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary to-accent flex items-center justify-center text-primary-foreground font-semibold">
-                    {profile?.display_name?.charAt(0).toUpperCase() || 'U'}
-                  </div>
+                  <Avatar
+                    photoUrl={profile?.photo_url ?? null}
+                    displayName={profile?.display_name}
+                    email={user?.email}
+                    size="sm"
+                    className="border border-primary/20"
+                  />
                   <span className="text-sm font-medium">{profile?.display_name?.split(' ')[0] || 'User'}</span>
                 </button>
                 <AnimatePresence>
