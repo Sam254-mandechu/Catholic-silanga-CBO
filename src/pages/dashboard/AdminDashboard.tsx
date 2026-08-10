@@ -49,6 +49,7 @@ import type {
   } from '../../types/database';
 import { HIERARCHY_ORDER } from '../../types/database';
 import { Modal } from '../../components/common/Modal';
+import { Avatar } from '../../components/common/Avatar';
 import { SiteContentTab } from './SiteContentTab';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip,
@@ -288,6 +289,46 @@ export const AdminDashboard: React.FC = () => {
                     </motion.div>
                   ))}
                 </div>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Quick access — admin has full powers</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-xs text-muted-foreground mb-3">
+                      You (the coordinator/admin) can fully operate every portal below — verify donations,
+                      record expenses, submit reports, mark attendance, issue fines, approve members, post news.
+                      Use these shortcuts to jump into each portal.
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <button
+                        onClick={() => navigate('/treasurer-portal')}
+                        className="text-left p-4 rounded-lg border bg-gradient-to-br from-success/5 to-success/10 hover:shadow-md transition-all"
+                      >
+                        <Banknote className="w-5 h-5 text-success mb-2" />
+                        <div className="font-semibold text-sm">Treasurer Portal</div>
+                        <div className="text-xs text-muted-foreground">Donations, expenses, fines, reports, records</div>
+                      </button>
+                      <button
+                        onClick={() => navigate('/secretary-portal')}
+                        className="text-left p-4 rounded-lg border bg-gradient-to-br from-accent/5 to-accent/10 hover:shadow-md transition-all"
+                      >
+                        <FileText className="w-5 h-5 text-accent mb-2" />
+                        <div className="font-semibold text-sm">Secretary Portal</div>
+                        <div className="text-xs text-muted-foreground">Meetings, RSVPs, attendance, minutes, polls</div>
+                      </button>
+                      <button
+                        onClick={() => navigate('/moderator-portal')}
+                        className="text-left p-4 rounded-lg border bg-gradient-to-br from-gold-400/10 to-gold-400/20 hover:shadow-md transition-all"
+                      >
+                        <Shield className="w-5 h-5 text-gold-700 mb-2" />
+                        <div className="font-semibold text-sm">Moderator Portal</div>
+                        <div className="text-xs text-muted-foreground">Member approvals, news, announcements, fines</div>
+                      </button>
+                    </div>
+                  </CardContent>
+                </Card>
+
                 {members.filter((m) => m.status === 'pending').length > 0 && (
                   <Card className="border-gold-400/40 bg-gold-100/20">
                     <CardContent className="p-5 flex items-center justify-between flex-wrap gap-3">
@@ -2265,9 +2306,12 @@ const RolesTab: React.FC<{ members: Profile[]; setMembers: (p: any) => void }> =
           {members.filter((m) => m.status === 'active').map((m) => (
             <div key={m.id} className="flex items-center justify-between p-3 rounded border">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary to-gold-500 flex items-center justify-center text-white font-bold">
-                  {m.display_name.charAt(0)}
-                </div>
+                <Avatar
+                  photoUrl={m.photo_url ?? null}
+                  displayName={m.display_name}
+                  email={m.email}
+                  size="md"
+                />
                 <div>
                   <p className="font-medium">{m.display_name}</p>
                   <p className="text-xs text-muted-foreground">

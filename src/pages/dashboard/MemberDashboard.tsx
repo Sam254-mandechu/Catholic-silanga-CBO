@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Ca
 import { Button } from '../../components/ui/Button';
 import { Input, Textarea } from '../../components/ui/Input';
 import { Modal } from '../../components/common/Modal';
+import { Avatar } from '../../components/common/Avatar';
 import { ProfilePhotoUploader } from '../../components/dashboard/ProfilePhotoUploader';
 import { NotificationsTab } from '../../components/dashboard/NotificationsTab';
 import { useAuth } from '../../contexts/AuthContext';
@@ -299,9 +300,13 @@ export const MemberDashboard: React.FC = () => {
             {/* Profile (always shown, sticky-ish) */}
             <Card className="lg:col-span-1 h-fit">
               <CardContent className="p-6 text-center">
-                <div className="w-24 h-24 mx-auto rounded-full bg-gradient-to-br from-primary to-accent flex items-center justify-center text-primary-foreground text-3xl font-bold mb-4 shadow-lg">
-                  {(profile.display_name || user.email || 'U').charAt(0).toUpperCase()}
-                </div>
+                <Avatar
+                  photoUrl={profile.photo_url ?? null}
+                  displayName={profile.display_name}
+                  email={user.email}
+                  size="xl"
+                  className="mx-auto mb-4 shadow-lg"
+                />
                 <h2 className="font-heading text-xl font-bold mb-1">{profile.display_name}</h2>
                 <p className="text-sm text-muted-foreground mb-3">{user.email}</p>
                 {profile.hierarchy_role && (

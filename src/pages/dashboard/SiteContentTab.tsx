@@ -27,11 +27,13 @@ export const SiteContentTab: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [uploadingHero, setUploadingHero] = useState(false);
+  const [uploadingWelcome, setUploadingWelcome] = useState(false);
 
   const KEYS: SiteContentKey[] = [
-    'welcome_message', 'welcome_subtitle', 'home_hero_image',
-    'mission', 'vision',
+    'welcome_message', 'welcome_subtitle', 'welcome_image_url', 'home_hero_image',
+    'mission', 'vision', 'values',
     'contact_address', 'contact_phone', 'contact_email', 'contact_hours',
+    'social_facebook', 'social_twitter', 'social_instagram', 'social_youtube',
     'terms_of_service', 'privacy_policy',
   ];
 
@@ -73,7 +75,11 @@ export const SiteContentTab: React.FC = () => {
     }
   };
 
-  const handleHeroUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    setter: (busy: boolean) => void,
+    siteKey: SiteContentKey,
+  ): Promise<void> => {
     const file = e.target.files?.[0];
     if (!file) return;
     const { data: { user } } = await supabase.auth.getUser();
@@ -81,19 +87,25 @@ export const SiteContentTab: React.FC = () => {
       toast.error('Not signed in');
       return;
     }
-    setUploadingHero(true);
+    setter(true);
     try {
       const url = await uploadProfilePhoto(user.id, file);
-      setContent((c) => ({ ...c, home_hero_image: url }));
-      await upsertSiteContent({ home_hero_image: url });
-      toast.success('Hero image uploaded');
+      setContent((c) => ({ ...c, [siteKey]: url }));
+      await upsertSiteContent({ [siteKey]: url });
+      toast.success('Image uploaded');
     } catch (err: any) {
       toast.error(err?.message ?? 'Upload failed');
     } finally {
-      setUploadingHero(false);
+      setter(false);
       e.target.value = '';
     }
   };
+
+  const handleHeroUpload = (e: React.ChangeEvent<HTMLInputElement>) =>
+    handleImageUpload(e, setUploadingHero, 'home_hero_image');
+
+  const handleWelcomeUpload = (e: React.ChangeEvent<HTMLInputElement>) =>
+    handleImageUpload(e, setUploadingWelcome, 'welcome_image_url');
 
   const SectionHeader: React.FC<{ title: string; hint: string }> = ({ title, hint }) => (
     <div className="mb-3">
@@ -194,6 +206,47 @@ export const SiteContentTab: React.FC = () => {
               Optional. Image URL is saved to <code>site_content.home_hero_image</code>.
             </p>
           </div>
+          <div>
+            <label className="block text-sm font-medium mb-1.5">
+              Welcome overlay image (optional)
+            </label>
+            <div className="flex items-center gap-3 flex-wrap">
+              {content.welcome_image_url ? (
+                <img
+                  src={content.welcome_image_url}
+                  alt="Welcome overlay"
+                  className="w-32 h-20 object-cover rounded border"
+                />
+              ) : (
+                <div className="w-32 h-20 rounded border bg-muted flex items-center justify-center text-xs text-muted-foreground">
+                  No image
+                </div>
+              )}
+              <label className="cursor-pointer">
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleWelcomeUpload}
+                />
+                <span className="inline-flex items-center gap-2 px-3 py-2 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90">
+                  <Upload className="w-4 h-4" /> {uploadingWelcome ? 'Uploading…' : 'Upload'}
+                </span>
+              </label>
+              {content.welcome_image_url && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setContent({ ...content, welcome_image_url: '' })}
+                >
+                  Clear
+                </Button>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Optional. Shown as an overlay on the home welcome card. Saved to <code>site_content.welcome_image_url</code>.
+            </p>
+          </div>
           <SaveBtn k="welcome_message" />
         </CardContent>
       </Card>
@@ -218,6 +271,18 @@ export const SiteContentTab: React.FC = () => {
             onChange={(e) => setContent({ ...content, vision: e.target.value })}
           />
           <SaveBtn k="vision" />
+          <hr />
+          <SectionHeader
+            title="Core values (optional)"
+            hint="Short paragraphs or bullet points. Use blank lines between items."
+          />
+          <Textarea
+            rows={4}
+            value={content.values ?? ''}
+            onChange={(e) => setContent({ ...content, values: e.target.value })}
+            placeholder="Faith · Service · Community · Integrity"
+          />
+          <SaveBtn k="values" />
         </CardContent>
       </Card>
 
@@ -259,6 +324,55 @@ export const SiteContentTab: React.FC = () => {
                 onChange={(e) => setContent({ ...content, contact_hours: e.target.value })}
               />
               <SaveBtn k="contact_hours" />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Social media</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-xs text-muted-foreground mb-3">
+            Paste full URLs (e.g. https://facebook.com/catholicsilanga). Leave blank to hide the icon on the public Contact page.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Facebook</label>
+              <Input
+                value={content.social_facebook ?? ''}
+                onChange={(e) => setContent({ ...content, social_facebook: e.target.value })}
+                placeholder="https://facebook.com/…"
+              />
+              <SaveBtn k="social_facebook" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Twitter / X</label>
+              <Input
+                value={content.social_twitter ?? ''}
+                onChange={(e) => setContent({ ...content, social_twitter: e.target.value })}
+                placeholder="https://twitter.com/…"
+              />
+              <SaveBtn k="social_twitter" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Instagram</label>
+              <Input
+                value={content.social_instagram ?? ''}
+                onChange={(e) => setContent({ ...content, social_instagram: e.target.value })}
+                placeholder="https://instagram.com/…"
+              />
+              <SaveBtn k="social_instagram" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1.5">YouTube</label>
+              <Input
+                value={content.social_youtube ?? ''}
+                onChange={(e) => setContent({ ...content, social_youtube: e.target.value })}
+                placeholder="https://youtube.com/…"
+              />
+              <SaveBtn k="social_youtube" />
             </div>
           </div>
         </CardContent>

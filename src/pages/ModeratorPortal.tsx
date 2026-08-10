@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
-  Shield, Users, Newspaper, Megaphone, LogOut,
+  Shield, Users, Newspaper, Megaphone, LogOut, AlertCircle,
   CheckCircle, XCircle, Trash2, Plus, Save, Search, Pencil,
 } from 'lucide-react';
 
@@ -16,15 +16,17 @@ import { toast } from '../utils/toast';
 import {
   getNewsAll, addNews, deleteNews, toggleNewsPublished, updateNews,
   getAnnouncements, addAnnouncement, updateAnnouncement, deleteAnnouncement,
+  getFines,
 } from '../services/supabaseData';
-import { adminListPendingMembers, approveMember, suspendMember, unsuspendMember, adminListAllMembers } from '../services/supabaseAuth';
+import { adminListPendingMembers, approveMember, suspendMember, unsuspendMember, adminListAllMembers, listApprovedMembersByHierarchy } from '../services/supabaseAuth';
+import { FinesTab } from '../components/fines/FinesTab';
 import type {
   Profile, News, Announcement, AnnouncementPriority,
-  HierarchyRole,
+  HierarchyRole, Fine,
 } from '../types/database';
 import { HIERARCHY_ORDER } from '../types/database';
 
-type Tab = 'members' | 'news' | 'announcements' | 'overview';
+type Tab = 'members' | 'news' | 'announcements' | 'overview' | 'fines';
 
 const fmtDate = (iso: string): string => {
   try { return new Date(iso).toLocaleDateString(); } catch { return iso; }
@@ -45,21 +47,27 @@ export const ModeratorPortal: React.FC = () => {
   // Announcements data
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
 
+  // Fines data (loaded only when Fines tab is opened, via the useEffect trigger)
+  const [fines, setFines] = useState<Fine[]>([]);
+  const [members, setMembers] = useState<Profile[]>([]);
+
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
-        const [p, n, a] = await Promise.all([
+        const [p, n, a, m] = await Promise.all([
           adminListPendingMembers().catch(() => [] as Profile[]),
           getNewsAll().catch(() => [] as News[]),
           getAnnouncements().catch(() => [] as Announcement[]),
+          listApprovedMembersByHierarchy().catch(() => [] as Profile[]),
         ]);
         if (!mounted) return;
         setPending(p);
         setNews(n);
         setAnnouncements(a);
+        setMembers(m);
       } catch (err) {
         console.warn('Moderator data load failed', err);
       } finally {
@@ -68,6 +76,21 @@ export const ModeratorPortal: React.FC = () => {
     })();
     return () => { mounted = false; };
   }, []);
+
+  // Lazy-load fines when the Fines tab is opened (avoids hammering the RPC at boot)
+  useEffect(() => {
+    if (tab !== 'fines' || fines.length > 0) return;
+    let mounted = true;
+    (async () => {
+      try {
+        const f = await getFines();
+        if (mounted) setFines(f);
+      } catch (err) {
+        console.warn('Fines load failed', err);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [tab]);
 
   const handleLogout = async () => {
     await logout();
@@ -87,6 +110,7 @@ export const ModeratorPortal: React.FC = () => {
   const tabs: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
     { id: 'overview', label: 'Overview', icon: Shield },
     { id: 'members', label: 'Members', icon: Users },
+    { id: 'fines', label: 'Fines', icon: AlertCircle },
     { id: 'news', label: 'News', icon: Newspaper },
     { id: 'announcements', label: 'Announcements', icon: Megaphone },
   ];
@@ -176,6 +200,14 @@ export const ModeratorPortal: React.FC = () => {
               <AnnouncementsTab
                 announcements={announcements}
                 setAnnouncements={setAnnouncements}
+              />
+            )}
+
+            {tab === 'fines' && (
+              <FinesTab
+                fines={fines}
+                setFines={setFines}
+                members={members}
               />
             )}
           </main>

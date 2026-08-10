@@ -4,13 +4,11 @@ import { motion } from 'framer-motion';
 import { Mail, Users as UsersIcon, Shield, Sparkles, Crown } from 'lucide-react';
 import { PageHeader } from '../components/common/PageHeader';
 import { Loader } from '../components/common/Loader';
+import { Avatar } from '../components/common/Avatar';
 import { Card, CardContent } from '../components/ui/Card';
 import { listAdministration } from '../services/supabaseData';
 import type { AdministrationMember } from '../types/database';
 import { ROLE_LABEL } from '../types/database';
-
-const fallbackAvatar =
-  'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a8 8 0 0 1 16 0v1"/></svg>';
 
 const ROLE_TONE: Record<AdministrationMember['role'], { cls: string; icon: React.ComponentType<{ className?: string }> }> = {
   admin:     { cls: 'bg-primary text-primary-foreground',  icon: Crown },
@@ -31,14 +29,12 @@ const AdministrationCard: React.FC<{ member: AdministrationMember; index: number
       transition={{ duration: 0.5, delay: index * 0.05 }}
     >
       <Card className="h-full hover:shadow-xl transition-shadow overflow-hidden">
-        <div className="relative h-48 overflow-hidden bg-muted">
-          <img
-            src={member.photo_url || fallbackAvatar}
-            alt={member.display_name}
-            className="w-full h-full object-cover"
-            onError={(e) => {
-              (e.currentTarget as HTMLImageElement).src = fallbackAvatar;
-            }}
+        <div className="relative h-48 overflow-hidden bg-muted flex items-center justify-center">
+          <Avatar
+            photoUrl={member.photo_url ?? null}
+            displayName={member.display_name}
+            size="xl"
+            className="w-32 h-32 !text-3xl"
           />
           <div className={`absolute top-3 left-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${tone.cls}`}>
             <Icon className="w-3 h-3" />
