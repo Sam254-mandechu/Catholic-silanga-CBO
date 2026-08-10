@@ -79,7 +79,7 @@ const PIE_COLORS = ['#a82524', '#f59e0b', '#15803d', '#6366f1', '#db2777', '#089
 
 export const AdminDashboard: React.FC = () => {
   const navigate = useNavigate();
-  const { logout } = useAuth();
+  const { logout, profile: currentProfile } = useAuth();
   const [tab, setTab] = useState<Tab>('overview');
 
   // Data
@@ -138,7 +138,14 @@ export const AdminDashboard: React.FC = () => {
 
           if (mounted) {
             setProjects(p); setNews(n); setEvents(e); setGallery(g); setContacts(c);
-            setMembers(m); setTasks(t); setDonations(d); setPaymentMethods(pm); setAnnouncements(an);
+            // Exclude the current admin's own profile from the members list — admin
+            // is managed separately, not via "pending verifications".
+            const adminId = currentProfile?.id;
+            const filteredMembers = (m ?? []).filter(
+              (mem: Profile) => mem.id !== adminId && mem.role !== 'admin',
+            );
+            setMembers(filteredMembers);
+            setTasks(t); setDonations(d); setPaymentMethods(pm); setAnnouncements(an);
             setMeetings(mt as Meeting[]); setPolls(pl as Poll[]); setExpenses(ex as Expense[]);
             setFinancialReports(fr as FinancialReport[]);
             setPollOptionsByPoll(optsMap);
