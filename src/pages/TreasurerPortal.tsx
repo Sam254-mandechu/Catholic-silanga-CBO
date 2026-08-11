@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   Banknote, ClipboardList, Heart, BarChart3, LogOut,
-  Plus, Trash2, Save, CheckCircle, XCircle, Eye, Receipt,
+  Plus, Trash2, Save, CheckCircle, Eye, Receipt,
   AlertCircle, Users, CreditCard,
   Sparkles, Pencil, Search, Send,
 } from 'lucide-react';
@@ -20,9 +20,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { toast } from '../utils/toast';
 
 import {
-  getRecentDonations,
-  adminVerifyDonation,
-  treasurerRecordDonation,
+  listAllDonations,
   getExpenses, createExpense, approveExpense, deleteExpense,
   getFinancialReports,
   submitFinancialReport, approveFinancialReport,
@@ -34,6 +32,7 @@ import { listApprovedMembersByHierarchy } from '../services/supabaseAuth';
 import { supabase } from '../config/supabaseClient';
 import { RecordsTab } from '../components/treasurer/RecordsTab';
 import { FinesTab } from '../components/fines/FinesTab';
+import { DonationsTab } from '../components/donations/DonationsTab';
 import type {
   Donation, Expense, ExpenseCategory, FinancialReport,
   PaymentMethod, PaymentMethodType, Fine,
@@ -88,7 +87,7 @@ export const TreasurerPortal: React.FC = () => {
     (async () => {
       try {
         const [d, e, r, pm, fn, mb, rec] = await Promise.all([
-          getRecentDonations(200),
+          listAllDonations(500),
           getExpenses(),
           getFinancialReports(),
           getPaymentMethods(),
@@ -264,6 +263,8 @@ export const TreasurerPortal: React.FC = () => {
                 setDonations={setDonations}
                 members={members}
                 paymentMethods={paymentMethods}
+                canDelete={isAdmin()}
+                title="Donations / Contributions"
               />
             )}
             {tab === 'expenses' && (
@@ -336,330 +337,13 @@ const StatCard: React.FC<{
 );
 
 // ============================================================
-// DONATIONS TAB — verify/reject + record manually
+// DONATIONS TAB — extracted to src/components/donations/DonationsTab.tsx
+// (used by both TreasurerPortal and AdminDashboard for full CRUD)
 // ============================================================
-const DonationsTab: React.FC<{
-  donations: Donation[];
-  setDonations: (d: Donation[]) => void;
-  members: Profile[];
-  paymentMethods: PaymentMethod[];
-}> = ({ donations, setDonations, members, paymentMethods }) => {
-  const [filter, setFilter] = useState<'pending' | 'completed' | 'failed' | 'all'>('pending');
-  const [acting, setActing] = useState<string | null>(null);
-  const [rejectingId, setRejectingId] = useState<string | null>(null);
-  const [rejectNote, setRejectNote] = useState('');
-  const [recording, setRecording] = useState(false);
-  const [form, setForm] = useState({
-    donor_name: '',
-    email: '',
-    amount: 0,
-    currency: CURRENCY,
-    purpose: 'General donation',
-    message: '',
-    method_id: '',
-    reference_code: '',
-    donor_id: '',
-  });
-
-  const filtered = useMemo(() => {
-    if (filter === 'all') return donations;
-    return donations.filter((d) => d.status === filter);
-  }, [donations, filter]);
-
-  const counts = useMemo(() => ({
-    pending: donations.filter((d) => d.status === 'pending').length,
-    completed: donations.filter((d) => d.status === 'completed').length,
-    failed: donations.filter((d) => d.status === 'failed').length,
-    all: donations.length,
-  }), [donations]);
-
-  const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
-
-  const resetForm = () => setForm({
-    donor_name: '', email: '', amount: 0,
-    currency: CURRENCY, purpose: 'General donation', message: '',
-    method_id: '', reference_code: '', donor_id: '',
-  });
-
-  const handleVerify = async (d: Donation) => {
-    setActing(d.id);
-    try {
-      const updated = await adminVerifyDonation(d.id, { status: 'completed' });
-      setDonations(donations.map((x) => (x.id === d.id ? updated : x)));
-      toast.success(`Verified ${d.donor_name} — ${fmtMoney(Number(d.amount))}`);
-    } catch (err: any) {
-      toast.error(err?.message ?? 'Failed to verify contribution');
-    } finally {
-      setActing(null);
-    }
-  };
-
-  const handleReject = async () => {
-    if (!rejectingId) return;
-    setActing(rejectingId);
-    try {
-      const updated = await adminVerifyDonation(rejectingId, {
-        status: 'failed',
-        admin_note: rejectNote || 'Rejected by treasurer',
-      });
-      setDonations(donations.map((x) => (x.id === rejectingId ? updated : x)));
-      toast.success('Contribution rejected');
-      setRejectingId(null);
-      setRejectNote('');
-    } catch (err: any) {
-      toast.error(err?.message ?? 'Failed to reject contribution');
-    } finally {
-      setActing(null);
-    }
-  };
-
-  const handleRecordManually = async () => {
-    if (!form.donor_name.trim() || !form.email.trim() || form.amount <= 0) {
-      toast.error('Donor name, email, and amount are required');
-      return;
-    }
-    try {
-      const created = await treasurerRecordDonation({
-        donor_name: form.donor_name.trim(),
-        email: form.email.trim(),
-        amount: form.amount,
-        currency: form.currency,
-        purpose: form.purpose.trim() || 'General donation',
-        message: form.message.trim() || null,
-        method_id: form.method_id || null,
-        reference_code: form.reference_code.trim() || null,
-        donor_id: form.donor_id || null,
-      });
-      setDonations([created, ...donations]);
-      toast.success(`Recorded donation from ${form.donor_name}`);
-      setRecording(false);
-      resetForm();
-    } catch (err: any) {
-      toast.error(err?.message ?? 'Failed to record donation');
-    }
-  };
-
-  return (
-    <Card>
-      <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <CardTitle>Donations / Contributions</CardTitle>
-        <div className="flex gap-2 items-center">
-          <div className="flex gap-1 flex-wrap text-xs">
-            {([
-              { id: 'pending' as const, label: `Pending (${counts.pending})` },
-              { id: 'completed' as const, label: `Verified (${counts.completed})` },
-              { id: 'failed' as const, label: `Rejected (${counts.failed})` },
-              { id: 'all' as const, label: `All (${counts.all})` },
-            ] as const).map((f) => (
-              <button
-                key={f.id}
-                onClick={() => setFilter(f.id)}
-                className={`px-3 py-1.5 rounded-full font-semibold transition-colors ${
-                  filter === f.id
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-muted hover:bg-muted/70'
-                }`}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-          <Button size="sm" onClick={() => { resetForm(); setRecording(true); }} leftIcon={<Plus className="w-4 h-4" />}>
-            Record manually
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent>
-        {filtered.length === 0 ? (
-          <p className="text-sm text-muted-foreground py-8 text-center">
-            {filter === 'pending' ? 'No pending contributions to verify.' : `No ${filter} contributions.`}
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="border-b">
-                <tr className="text-left">
-                  <th className="py-2 font-semibold">Donor</th>
-                  <th className="py-2 font-semibold">Amount</th>
-                  <th className="py-2 font-semibold">Purpose</th>
-                  <th className="py-2 font-semibold">Method</th>
-                  <th className="py-2 font-semibold">Linked member</th>
-                  <th className="py-2 font-semibold">Status</th>
-                  <th className="py-2 font-semibold hidden md:table-cell">Date</th>
-                  <th className="py-2 font-semibold text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((d) => {
-                  const m = d.member_id ? memberById.get(d.member_id) : undefined;
-                  const pm = d.method_id ? paymentMethods.find((p) => p.id === d.method_id) : undefined;
-                  return (
-                    <tr key={d.id} className="border-b last:border-0 hover:bg-muted/30">
-                      <td className="py-3">
-                        <div className="font-medium">{d.donor_name}</div>
-                        <div className="text-xs text-muted-foreground">{d.email}</div>
-                      </td>
-                      <td className="py-3 font-mono">{fmtMoney(Number(d.amount))}</td>
-                      <td className="py-3">
-                        <div>{d.purpose}</div>
-                        {d.reference_code && (
-                          <div className="text-xs text-muted-foreground">Ref: {d.reference_code}</div>
-                        )}
-                      </td>
-                      <td className="py-3 text-xs">
-                        {pm ? (
-                          <span className="px-2 py-0.5 rounded-full bg-muted text-foreground font-semibold">
-                            {pm.label}
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </td>
-                      <td className="py-3 text-xs">
-                        {m ? (
-                          <span className="text-foreground">{m.display_name}</span>
-                        ) : (
-                          <span className="text-muted-foreground">Not linked</span>
-                        )}
-                      </td>
-                      <td className="py-3">
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
-                          d.status === 'completed' ? 'bg-success/15 text-success' :
-                          d.status === 'pending' ? 'bg-gold-400/20 text-gold-700' :
-                          'bg-destructive/15 text-destructive'
-                        }`}>
-                          {d.status}
-                        </span>
-                        {d.admin_note && (
-                          <div className="text-xs text-muted-foreground mt-1 max-w-[200px] truncate" title={d.admin_note}>
-                            Note: {d.admin_note}
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-3 hidden md:table-cell text-xs text-muted-foreground">
-                        {fmtDate(d.created_at)}
-                      </td>
-                      <td className="py-3 text-right">
-                        {d.status === 'pending' ? (
-                          <div className="flex gap-1 justify-end">
-                            <Button size="sm" variant="primary" disabled={acting === d.id}
-                              onClick={() => handleVerify(d)} leftIcon={<CheckCircle className="w-3.5 h-3.5" />}>
-                              Verify
-                            </Button>
-                            <Button size="sm" variant="outline" disabled={acting === d.id}
-                              onClick={() => { setRejectingId(d.id); setRejectNote(''); }}
-                              leftIcon={<XCircle className="w-3.5 h-3.5" />}>
-                              Reject
-                            </Button>
-                          </div>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">
-                            {d.verified_at ? `verified ${fmtDate(d.verified_at)}` : '—'}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </CardContent>
-
-      {rejectingId && (
-        <Modal onClose={() => setRejectingId(null)} title="Reject contribution">
-          <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Provide an optional reason. The donor will see this note on their dashboard.
-            </p>
-            <Textarea label="Reason (optional)" value={rejectNote}
-              onChange={(e) => setRejectNote(e.target.value)} rows={3}
-              placeholder="e.g. Reference number doesn't match our records" />
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => setRejectingId(null)}>Cancel</Button>
-              <Button variant="destructive" onClick={handleReject}
-                disabled={acting === rejectingId} isLoading={acting === rejectingId}
-                leftIcon={<XCircle className="w-4 h-4" />}>
-                Reject
-              </Button>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      {recording && (
-        <Modal onClose={() => setRecording(false)} title="Record donation manually" wide>
-          <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              For donations received offline (cash, M-Pesa confirmation, etc.). The treasurer
-              is recorded as the verifier, and the donor gets a notification if linked to a member.
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Input label="Donor name *" value={form.donor_name}
-                onChange={(e) => setForm({ ...form, donor_name: e.target.value })} />
-              <Input label="Donor email *" type="email" value={form.email}
-                onChange={(e) => setForm({ ...form, email: e.target.value })} />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <Input label="Amount *" type="number" step="0.01" value={form.amount || ''}
-                onChange={(e) => setForm({ ...form, amount: Number(e.target.value) })} />
-              <Input label="Currency" value={form.currency}
-                onChange={(e) => setForm({ ...form, currency: e.target.value })} />
-              <Input label="Purpose" value={form.purpose}
-                onChange={(e) => setForm({ ...form, purpose: e.target.value })} />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm font-medium mb-1.5">Payment method</label>
-                <select
-                  value={form.method_id}
-                  onChange={(e) => setForm({ ...form, method_id: e.target.value })}
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                >
-                  <option value="">— select method —</option>
-                  {paymentMethods.filter((pm) => pm.is_active).map((pm) => (
-                    <option key={pm.id} value={pm.id}>{pm.label}</option>
-                  ))}
-                </select>
-              </div>
-              <Input label="Reference code (optional)" value={form.reference_code}
-                onChange={(e) => setForm({ ...form, reference_code: e.target.value })}
-                placeholder="e.g. M-PESA code" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1.5">Linked member (optional)</label>
-              <select
-                value={form.donor_id}
-                onChange={(e) => setForm({ ...form, donor_id: e.target.value })}
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              >
-                <option value="">— not a member —</option>
-                {members.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.display_name} ({m.email}) {m.hierarchy_role ? `· ${m.hierarchy_role}` : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <Textarea label="Message (optional)" rows={2} value={form.message}
-              onChange={(e) => setForm({ ...form, message: e.target.value })} />
-            <div className="flex justify-end gap-2 pt-2 border-t">
-              <Button variant="outline" onClick={() => setRecording(false)}>Cancel</Button>
-              <Button onClick={handleRecordManually} leftIcon={<Save className="w-4 h-4" />}>
-                Record donation
-              </Button>
-            </div>
-          </div>
-        </Modal>
-      )}
-    </Card>
-  );
-};
 
 // ============================================================
 // EXPENSES TAB
-// ============================================================
+
 const ExpensesTab: React.FC<{
   expenses: Expense[];
   setExpenses: (e: Expense[]) => void;

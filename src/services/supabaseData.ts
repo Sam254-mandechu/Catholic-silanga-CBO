@@ -43,6 +43,8 @@ import type {
     FinancialRecordPreview,
     // v13 — administration roster
     AdministrationMember,
+    // v14 — donation type
+    DonationType,
   } from '../types/database';
 
 // =====================================================================
@@ -240,7 +242,7 @@ export async function adminMarkContactRead(id: string, read: boolean): Promise<v
  * attaches it as `donor_id` so the per-member panel can query by it.
  */
 export async function recordDonation(
-  input: Omit<Donation, 'id' | 'created_at' | 'status' | 'donor_id'>,
+  input: Omit<Donation, 'id' | 'created_at' | 'status' | 'donor_id' | 'created_by'>,
 ): Promise<Donation> {
   const { data: { user } } = await supabase.auth.getUser();
   const { data, error } = await supabase
@@ -249,6 +251,7 @@ export async function recordDonation(
       ...input,
       status: 'pending',
       donor_id: user?.id ?? null,
+      created_by: user?.id ?? null,
     })
     .select('*')
     .single();
@@ -1887,4 +1890,112 @@ export async function listAdministration(): Promise<AdministrationMember[]> {
   const { data, error } = await supabase.rpc('list_administration');
   if (error) throw error;
   return (data ?? []) as AdministrationMember[];
+}
+
+
+// =====================================================================
+// v14 — Member-contributions CRUD (treasurer / admin full access,
+// member sees their own only)
+// =====================================================================
+
+/** All donations — used by TreasurerPortal + AdminDashboard full tables. */
+export async function listAllDonations(limit = 500): Promise<Donation[]> {
+  const { data, error } = await supabase.rpc('list_all_donations', { p_limit: limit });
+  if (error) throw error;
+  return (data ?? []) as Donation[];
+}
+
+/** All donations for a specific member — used by the picker preview. */
+export async function listDonationsForMember(
+  member_id: string,
+  limit = 100,
+): Promise<Donation[]> {
+  const { data, error } = await supabase.rpc('list_donations_for_member', {
+    p_member_id: member_id,
+    p_limit: limit,
+  });
+  if (error) throw error;
+  return (data ?? []) as Donation[];
+}
+
+/**
+ * Treasury/admin records a contribution FOR a specific member.
+ * Status defaults to 'completed' (treasurer IS the verifier).
+ * Stamps created_by and verified_by; member_id + donor_id both
+ * point to the member's profile so the row shows up in their portal.
+ */
+export async function recordDonationForMember(input: {
+  member_id: string;
+  donor_name: string;
+  email: string;
+  amount: number;
+  currency?: string;
+  purpose?: string;
+  donation_type?: DonationType;
+  message?: string | null;
+  method_id?: string | null;
+  reference_code?: string | null;
+  status?: 'pending' | 'completed' | 'failed';
+  contribution_date?: string | null;
+  notify_member?: boolean;
+}): Promise<Donation> {
+  const { data, error } = await supabase.rpc('record_donation_for_member', {
+    p_member_id: input.member_id,
+    p_donor_name: input.donor_name,
+    p_email: input.email,
+    p_amount: input.amount,
+    p_currency: input.currency ?? 'KES',
+    p_purpose: input.purpose ?? 'General donation',
+    p_donation_type: input.donation_type ?? 'other',
+    p_message: input.message ?? null,
+    p_method_id: input.method_id ?? null,
+    p_reference_code: input.reference_code ?? null,
+    p_status: input.status ?? 'completed',
+    p_contribution_date: input.contribution_date ?? null,
+    p_notify_member: input.notify_member ?? true,
+  });
+  if (error) throw error;
+  return data as Donation;
+}
+
+/**
+ * Treasury/admin edits an existing contribution. Only fields present in
+ * `patch` are updated. If status flips to 'completed', verified_by/at
+ * are stamped. If reverting from completed, the original verifier is kept.
+ */
+export async function updateDonation(
+  donation_id: string,
+  patch: Partial<{
+    donor_name: string;
+    email: string;
+    amount: number;
+    currency: string;
+    purpose: string;
+    donation_type: DonationType;
+    message: string | null;
+    member_id: string;
+    method_id: string | null;
+    reference_code: string | null;
+    status: 'pending' | 'completed' | 'failed';
+    admin_note: string | null;
+  }>,
+): Promise<Donation> {
+  const { data, error } = await supabase.rpc('update_donation', {
+    p_donation_id: donation_id,
+    p_patch: patch,
+  });
+  if (error) throw error;
+  return data as Donation;
+}
+
+/**
+ * Admin-only: delete a contribution. Hard delete (no soft-delete /
+ * archive). Cascades are scoped — only the row goes away, the member
+ * and payment method rows are untouched.
+ */
+export async function deleteDonation(donation_id: string): Promise<void> {
+  const { error } = await supabase.rpc('delete_donation', {
+    p_donation_id: donation_id,
+  });
+  if (error) throw error;
 }

@@ -7,6 +7,35 @@ export type Role = 'admin' | 'member' | 'moderator' | 'secretary' | 'treasurer';
 export type AccountStatus = 'active' | 'pending' | 'suspended';
 export type ProjectStatus = 'planning' | 'ongoing' | 'completed';
 export type DonationStatus = 'pending' | 'completed' | 'failed';
+
+/** v14 — categorizes a contribution for filtering + display. */
+export type DonationType =
+  | 'tithe'
+  | 'offering'
+  | 'building_fund'
+  | 'missions'
+  | 'youth'
+  | 'welfare'
+  | 'event'
+  | 'pledge'
+  | 'other';
+
+export const DONATION_TYPE_LABEL: Record<DonationType, string> = {
+  tithe:          'Tithe',
+  offering:       'Offering',
+  building_fund:  'Building Fund',
+  missions:       'Missions',
+  youth:          'Youth',
+  welfare:        'Welfare',
+  event:          'Event',
+  pledge:         'Pledge',
+  other:          'Other',
+};
+
+export const DONATION_TYPES: DonationType[] = [
+  'tithe','offering','building_fund','missions',
+  'youth','welfare','event','pledge','other',
+];
 export type AnnouncementPriority = 'low' | 'medium' | 'high';
 
 /**
@@ -154,6 +183,9 @@ export interface Donation {
   verified_by: string | null;      // v2 — admin who verified it
   verified_at: string | null;      // v2
   admin_note: string | null;       // v2
+  created_by: string | null;       // v14 — who keyed in the row (treasurer/admin/member)
+  /** v14 — categorizes the contribution. */
+  donation_type: DonationType;
   created_at: string;
 }
 

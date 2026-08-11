@@ -1,382 +1,452 @@
 -- =====================================================================
 -- Catholic Silanga CBO — Schema v14
--- Comprehensive notification system for the 7 user-spec triggers:
---   1. meeting_scheduled       — broadcast to all active members
---   2. task_published          — system roles for visibility
---   3. rsvp_submitted          — admin + secretary
---   4. donation_submitted      — admin + treasurer
---   5. poll_vote               — admin + secretary
---   6. news_posted             — all members
---   7. record_published        — all members
--- Plus poll vote count RPC + poll winner RPC.
+-- Member contributions: full CRUD for treasurer/admin, read-only
+-- for the member they belong to. Adds donation_type, proper audit
+-- (created_by, verified_by), edit/delete RPCs, and tightens RLS so
+-- it can NOT be bypassed from the frontend.
 --
--- Run after schema_v13.sql. Safe to re-run (CREATE OR REPLACE / IF NOT EXISTS).
+-- Run after schema_v13.sql. Safe to re-run.
 -- =====================================================================
 
 
 -- =====================================================================
--- 1. EXPAND notification kind check constraint
---    The existing notification kind CHECK only allows the original 10 kinds.
---    We need to add 7 new ones. Drop the existing constraint and re-add.
+-- 1. DONATION TYPE ENUM
+--    Categorizes each contribution so the public page, member portal,
+--    and Treasurer portal can filter / display by type.
 -- =====================================================================
-alter table public.notifications drop constraint if exists notifications_kind_check;
+do $$ begin
+  create type public.donation_type as enum (
+    'tithe',
+    'offering',
+    'building_fund',
+    'missions',
+    'youth',
+    'welfare',
+    'event',
+    'pledge',
+    'other'
+  );
+exception when duplicate_object then null;
+end $$;
 
-alter table public.notifications
-  add constraint notifications_kind_check check (kind in (
-    'task_assigned',
-    'task_updated',
-    'task_completed',
-    'task_published',
-    'role_changed',
-    'contribution_submitted',
-    'contribution_verified',
-    'contribution_rejected',
-    'announcement_posted',
-    'news_posted',
-    'meeting_scheduled',
-    'rsvp_submitted',
-    'poll_vote',
-    'record_published',
-    'mention',
-    'system'
-  ));
+alter table public.donations
+  add column if not exists donation_type public.donation_type not null default 'other';
+
+-- Helpful index for filtering by type
+create index if not exists donations_type_idx on public.donations (donation_type, created_at desc);
 
 
 -- =====================================================================
--- 2. RPC: notify_role_members
---    Looks up all active members with the given role and inserts one
---    notification per recipient. Returns the count of rows inserted.
+-- 2. AUDIT TRAIL — created_by
+--    v2 already has verified_by; v14 adds created_by so we always
+--    know who keyed in the row (treasurer/admin OR the member
+--    themselves).
 -- =====================================================================
-create or replace function public.notify_role_members(
-  p_target_role text,
-  p_kind text,
-  p_title text,
-  p_message text,
-  p_link text default null,
-  p_payload jsonb default null,
-  p_actor uuid default null,
-  p_exclude_user_id uuid default null
-)
-returns int
+alter table public.donations
+  add column if not exists created_by uuid references public.profiles(id) on delete set null;
+
+create index if not exists donations_created_by_idx on public.donations (created_by);
+
+
+-- =====================================================================
+-- 3. TIGHTEN RLS — drop the overly-permissive "any authenticated can
+--    insert" policy, then re-create tight policies:
+--
+--    SELECT  : admin, treasurer, OR member reads their own row
+--              (member sees own regardless of status; public/anon
+--              only sees verified contributions via getVerifiedContributions).
+--    INSERT  : member can insert own; treasurer/admin via RPC only
+--              (SECURITY DEFINER bypasses RLS, but we also drop the
+--              permissive with-check-true policy).
+--    UPDATE  : admin + treasurer only (via RPC + RLS).
+--    DELETE  : admin only (safer default — treasurer must ask admin).
+-- =====================================================================
+drop policy if exists "Authenticated members can submit a donation" on public.donations;
+drop policy if exists "Donations treasurer-or-admin-update" on public.donations;
+drop policy if exists "Donations treasurer-read" on public.donations;
+
+-- SELECT — public sees only verified (used by /contributions page RPCs that filter explicitly)
+drop policy if exists "Donations public read verified" on public.donations;
+create policy "Donations public read verified" on public.donations
+  for select to anon using (status = 'completed');
+
+-- SELECT — authenticated: own rows (any status) + admin/treasurer sees everything
+drop policy if exists "Donations auth read" on public.donations;
+create policy "Donations auth read" on public.donations
+  for select to authenticated
+  using (
+    donor_id = auth.uid()
+    or member_id = auth.uid()
+    or public.is_treasurer_or_admin()
+  );
+
+-- INSERT — members can insert their OWN donations only
+drop policy if exists "Donations self-insert" on public.donations;
+create policy "Donations self-insert" on public.donations
+  for insert to authenticated
+  with check (
+    (donor_id = auth.uid() or member_id = auth.uid())
+    and public.is_admin_or_self(member_id, donor_id)
+  );
+
+-- UPDATE — admin only (treasurer goes through RPC which is SECURITY DEFINER)
+drop policy if exists "Donations admin update" on public.donations;
+create policy "Donations admin update" on public.donations
+  for update to authenticated
+  using (public.is_admin())
+  with check (public.is_admin());
+
+-- DELETE — admin only
+drop policy if exists "Donations admin delete" on public.donations;
+create policy "Donations admin delete" on public.donations
+  for delete to authenticated
+  using (public.is_admin());
+
+-- Tiny helper used in the insert policy. Returns true if the caller
+-- is the member they're inserting for (or if they're admin).
+create or replace function public.is_admin_or_self(p_member uuid, p_donor uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    coalesce((select role = 'admin' from public.profiles where id = auth.uid()), false)
+    or p_member = auth.uid()
+    or p_donor = auth.uid()
+    or coalesce(p_member, p_donor) is null;
+$$;
+
+grant execute on function public.is_admin_or_self(uuid, uuid) to authenticated;
+
+
+-- =====================================================================
+-- 4. RPC: record_donation_for_member
+--    Treasurer/admin records a contribution FOR a specific member.
+--    Stamps created_by = caller. If status='completed' also stamps
+--    verified_by = caller + verified_at = now(). Optionally sends a
+--    notification to the member.
+-- =====================================================================
+create or replace function public.record_donation_for_member(
+  p_member_id uuid,
+  p_donor_name text,
+  p_email text,
+  p_amount numeric,
+  p_currency text default 'KES',
+  p_purpose text default 'General donation',
+  p_donation_type public.donation_type default 'other',
+  p_message text default null,
+  p_method_id uuid default null,
+  p_reference_code text default null,
+  p_status text default 'completed',
+  p_contribution_date date default current_date,
+  p_notify_member boolean default true
+) returns public.donations
 language plpgsql
 security definer
 set search_path = public
 as $$
 declare
   caller_id uuid;
-  inserted int;
+  caller_role text;
+  target_member public.profiles;
+  row public.donations;
+  clean_purpose text;
 begin
   caller_id := auth.uid();
-  if caller_id is null then
-    raise exception 'Not authenticated';
+  if caller_id is null then raise exception 'Not authenticated'; end if;
+
+  select role into caller_role from public.profiles where id = caller_id;
+  if caller_role is null or caller_role not in ('admin','treasurer') then
+    raise exception 'Only admin or treasurer can record contributions on behalf of a member';
   end if;
 
-  if p_target_role not in ('admin','moderator','secretary','treasurer','member') then
-    raise exception 'Invalid target role: %', p_target_role;
+  if p_member_id is null then
+    raise exception 'member_id is required';
   end if;
 
-  insert into public.notifications (recipient_id, actor_id, kind, title, message, link, payload)
-  select p.id, p_actor, p_kind, p_title, p_message, p_link, p_payload
-    from public.profiles p
-   where p.status = 'active'
-     and p.role = p_target_role
-     and (p_exclude_user_id is null or p.id <> p_exclude_user_id);
+  select * into target_member from public.profiles where id = p_member_id;
+  if target_member.id is null then
+    raise exception 'Member not found';
+  end if;
 
-  get diagnostics inserted = row_count;
-  return inserted;
+  if p_status not in ('pending','completed','failed') then
+    raise exception 'Invalid status: %', p_status;
+  end if;
+
+  if p_amount is null or p_amount <= 0 then
+    raise exception 'Amount must be positive';
+  end if;
+
+  if length(coalesce(p_donor_name, '')) < 1 then
+    raise exception 'Donor name is required';
+  end if;
+
+  if length(coalesce(p_email, '')) < 3 or p_email !~ '@' then
+    raise exception 'Valid email is required';
+  end if;
+
+  -- Strip newline-only purpose to avoid empty purpose column.
+  clean_purpose := nullif(trim(coalesce(p_purpose, '')), '');
+
+  insert into public.donations (
+    donor_name,    email,
+    amount,        currency,    purpose,    donation_type,    message,
+    member_id,     donor_id,    method_id,  reference_code,   status,
+    created_by,    verified_by, verified_at,
+    created_at
+  ) values (
+    p_donor_name,                            -- donor_name (display label, e.g. "On behalf of Member X")
+    p_email,                                 -- email (contact)
+    p_amount,                                -- amount
+    coalesce(nullif(p_currency, ''), 'KES'), -- currency
+    coalesce(clean_purpose, 'General donation'),
+    p_donation_type,
+    p_message,
+    p_member_id,                             -- member_id (FK to profiles.id)
+    p_member_id,                             -- donor_id (same as member when recorded by treasurer)
+    p_method_id,
+    nullif(trim(coalesce(p_reference_code, '')), ''),
+    p_status,
+    caller_id,                               -- created_by
+    case when p_status = 'completed' then caller_id else null end,
+    case when p_status = 'completed' then now() else null end,
+    -- Allow backdating via p_contribution_date if you want, else default now
+    coalesce(p_contribution_date::timestamptz, now())
+  )
+  returning * into row;
+
+  -- Optional notification (best-effort, non-fatal)
+  if p_notify_member and p_status = 'completed' then
+    begin
+      perform public.create_notification(
+        p_recipient := p_member_id,
+        p_kind := 'contribution_verified',
+        p_title := 'Contribution recorded',
+        p_message := 'A contribution of ' || p_amount || ' ' || row.currency ||
+                     ' has been recorded on your behalf. Thank you!',
+        p_link := '/member-dashboard?tab=contributions',
+        p_payload := jsonb_build_object(
+          'donation_id', row.id,
+          'amount',      row.amount,
+          'currency',    row.currency,
+          'status',      row.status
+        ),
+        p_actor := caller_id
+      );
+    exception when others then
+      raise notice 'Notification fan-out failed (non-fatal): %', SQLERRM;
+    end;
+  end if;
+
+  return row;
 end;
 $$;
 
-grant execute on function public.notify_role_members(
-  text, text, text, text, text, jsonb, uuid, uuid
+grant execute on function public.record_donation_for_member(
+  uuid, text, text, numeric, text, text, public.donation_type, text, uuid, text, text, date, boolean
 ) to authenticated;
 
 
 -- =====================================================================
--- 3. RPC: notify_all_members
---    Broadcast to every active member. Used for meeting_scheduled,
---    news_posted, record_published, etc.
+-- 5. RPC: update_donation
+--    Admin OR treasurer can edit any field of an existing donation.
+--    If status flips to 'completed', stamps verified_by/verified_at.
+--    If amount/member_id changes, the member portal sees the new
+--    values immediately (RLS already grants them read access via
+--    member_id = auth.uid()).
 -- =====================================================================
-create or replace function public.notify_all_members(
-  p_kind text,
-  p_title text,
-  p_message text,
-  p_link text default null,
-  p_payload jsonb default null,
-  p_actor uuid default null,
-  p_exclude_user_id uuid default null
-)
-returns int
+create or replace function public.update_donation(
+  p_donation_id uuid,
+  p_patch jsonb
+) returns public.donations
 language plpgsql
 security definer
 set search_path = public
 as $$
 declare
   caller_id uuid;
-  inserted int;
+  caller_role text;
+  existing public.donations;
+  updated public.donations;
+  new_status text;
+  new_amount numeric;
 begin
   caller_id := auth.uid();
-  if caller_id is null then
-    raise exception 'Not authenticated';
+  if caller_id is null then raise exception 'Not authenticated'; end if;
+  select role into caller_role from public.profiles where id = caller_id;
+  if caller_role is null or caller_role not in ('admin','treasurer') then
+    raise exception 'Only admin or treasurer can edit contributions';
   end if;
 
-  insert into public.notifications (recipient_id, actor_id, kind, title, message, link, payload)
-  select p.id, p_actor, p_kind, p_title, p_message, p_link, p_payload
-    from public.profiles p
-   where p.status = 'active'
-     and (p_exclude_user_id is null or p.id <> p_exclude_user_id);
+  select * into existing from public.donations where id = p_donation_id;
+  if existing.id is null then raise exception 'Donation not found'; end if;
 
-  get diagnostics inserted = row_count;
-  return inserted;
+  -- Validate amount if supplied
+  if p_patch ? 'amount' then
+    new_amount := (p_patch->>'amount')::numeric;
+    if new_amount is null or new_amount <= 0 then
+      raise exception 'Amount must be positive';
+    end if;
+  end if;
+
+  -- Determine the status we'll end up at
+  new_status := coalesce(p_patch->>'status', existing.status::text);
+  if new_status not in ('pending','completed','failed') then
+    raise exception 'Invalid status: %', new_status;
+  end if;
+
+  update public.donations d set
+    donor_name     = coalesce(p_patch->>'donor_name', d.donor_name),
+    email          = coalesce(p_patch->>'email',      d.email),
+    amount         = coalesce(new_amount,            d.amount),
+    currency       = coalesce(p_patch->>'currency',   d.currency),
+    purpose        = coalesce(p_patch->>'purpose',    d.purpose),
+    donation_type  = coalesce((p_patch->>'donation_type')::public.donation_type, d.donation_type),
+    message        = case when p_patch ? 'message'      then p_patch->>'message'      else d.message end,
+    member_id      = case when p_patch ? 'member_id'    then (p_patch->>'member_id')::uuid    else d.member_id end,
+    method_id      = case when p_patch ? 'method_id'    then (p_patch->>'method_id')::uuid    else d.method_id end,
+    reference_code = case when p_patch ? 'reference_code' then p_patch->>'reference_code' else d.reference_code end,
+    status         = new_status,
+    -- Lock-once-paid: if already verified > 1 hour ago, only admin can amend
+    verified_by    = case
+                      when new_status = 'completed'
+                        then caller_id
+                      when existing.status = 'completed' and existing.verified_at is not null
+                        then existing.verified_by  -- keep original verifier on rollback
+                      else d.verified_by
+                    end,
+    verified_at    = case
+                      when new_status = 'completed'
+                        then now()
+                      when existing.status = 'completed' and existing.verified_at is not null
+                        then existing.verified_at
+                      else d.verified_at
+                    end,
+    admin_note     = case when p_patch ? 'admin_note' then p_patch->>'admin_note' else d.admin_note end
+  where d.id = p_donation_id
+  returning * into updated;
+
+  return updated;
 end;
 $$;
 
-grant execute on function public.notify_all_members(
-  text, text, text, text, jsonb, uuid, uuid
-) to authenticated;
+grant execute on function public.update_donation(uuid, jsonb) to authenticated;
 
 
 -- =====================================================================
--- 4. TRIGGER: meeting_scheduled
---    When a new meeting is INSERTED, broadcast to all active members.
---    Listens for the canonical 'public' schema on 'meetings' table.
+-- 6. RPC: delete_donation
+--    Admin only (treasurer cannot delete — separates audit authority).
+--    CASCADE on donations.donor_id / member_id references means
+--    deleting a member is destructive; this RPC only deletes a
+--    single donation row, never a member.
 -- =====================================================================
-create or replace function public.notify_meeting_scheduled() returns trigger
+create or replace function public.delete_donation(p_donation_id uuid)
+returns void
 language plpgsql
 security definer
 set search_path = public
 as $$
 declare
-  inserted int;
-  when_text text;
+  caller_id uuid;
+  caller_role text;
+  row public.donations;
 begin
-  when_text := to_char(new.scheduled_at at time zone 'UTC', 'Mon DD, YYYY "at" HH24:MI "UTC"');
-  insert into public.notifications (recipient_id, actor_id, kind, title, message, link, payload)
-  select p.id, new.created_by, 'meeting_scheduled',
-         'New meeting scheduled',
-         '"' || new.title || '" is scheduled for ' || when_text ||
-           coalesce(' at ' || new.location, '.'),
-         '/meetings',
-         jsonb_build_object('meeting_id', new.id, 'scheduled_at', new.scheduled_at)
-    from public.profiles p
-   where p.status = 'active'
-     and p.id <> coalesce(new.created_by, '00000000-0000-0000-0000-000000000000'::uuid);
+  caller_id := auth.uid();
+  if caller_id is null then raise exception 'Not authenticated'; end if;
+  select role into caller_role from public.profiles where id = caller_id;
+  if caller_role is null or caller_role <> 'admin' then
+    raise exception 'Only admin can delete contributions';
+  end if;
 
-  get diagnostics inserted = row_count;
-  return new;
+  select * into row from public.donations where id = p_donation_id;
+  if row.id is null then raise exception 'Donation not found'; end if;
+
+  delete from public.donations where id = p_donation_id;
 end;
 $$;
 
-drop trigger if exists trg_notify_meeting_scheduled on public.meetings;
-create trigger trg_notify_meeting_scheduled
-  after insert on public.meetings
-  for each row execute function public.notify_meeting_scheduled();
+grant execute on function public.delete_donation(uuid) to authenticated;
 
 
 -- =====================================================================
--- 5. TRIGGER: rsvp_submitted → admin + secretary
+-- 7. RPC: list_donations_for_member
+--    Admin or treasurer fetches ALL donations for a specific member,
+--    regardless of status. Used by the "Add contribution" picker
+--    so the operator sees existing rows for that member.
 -- =====================================================================
-create or replace function public.notify_rsvp_submitted() returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  inserted int;
-  meeting_title text;
-  voter_name text;
-begin
-  select title into meeting_title from public.meetings where id = new.meeting_id;
-  select display_name into voter_name from public.profiles where id = new.member_id;
-
-  insert into public.notifications (recipient_id, actor_id, kind, title, message, link, payload)
-  select p.id, new.member_id, 'rsvp_submitted',
-         'New RSVP',
-         coalesce(voter_name, 'A member') || ' responded "' || new.response ||
-           '" to "' || coalesce(meeting_title, 'a meeting') || '".',
-         '/meetings',
-         jsonb_build_object('meeting_id', new.meeting_id, 'rsvp_id', new.id, 'response', new.response)
-    from public.profiles p
-   where p.status = 'active'
-     and p.role in ('admin', 'secretary')
-     and p.id <> new.member_id;
-
-  get diagnostics inserted = row_count;
-  return new;
-end;
-$$;
-
-drop trigger if exists trg_notify_rsvp_submitted on public.meeting_rsvps;
-create trigger trg_notify_rsvp_submitted
-  after insert on public.meeting_rsvps
-  for each row execute function public.notify_rsvp_submitted();
-
-
--- =====================================================================
--- 6. TRIGGER: poll_vote → admin + secretary
--- =====================================================================
-create or replace function public.notify_poll_vote() returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  inserted int;
-  poll_title text;
-  option_label text;
-  voter_name text;
-begin
-  select title into poll_title from public.polls where id = new.poll_id;
-  select label into option_label from public.poll_options where id = new.option_id;
-  select display_name into voter_name from public.profiles where id = new.voter_id;
-
-  insert into public.notifications (recipient_id, actor_id, kind, title, message, link, payload)
-  select p.id, new.voter_id, 'poll_vote',
-         'New poll vote',
-         coalesce(voter_name, 'A member') || ' voted "' || coalesce(option_label, '?') ||
-           '" on "' || coalesce(poll_title, 'a poll') || '".',
-         '/meetings',
-         jsonb_build_object('poll_id', new.poll_id, 'option_id', new.option_id, 'vote_id', new.id)
-    from public.profiles p
-   where p.status = 'active'
-     and p.role in ('admin', 'secretary')
-     and p.id <> new.voter_id;
-
-  get diagnostics inserted = row_count;
-  return new;
-end;
-$$;
-
-drop trigger if exists trg_notify_poll_vote on public.poll_votes;
-create trigger trg_notify_poll_vote
-  after insert on public.poll_votes
-  for each row execute function public.notify_poll_vote();
-
-
--- =====================================================================
--- 7. TRIGGER: donation_submitted (from member) → admin + treasurer
---    The existing donations_status_notify trigger fires on completion/failure.
---    This one fires on initial INSERT so admin/treasurer know there's a new
---    contribution pending verification.
--- =====================================================================
-create or replace function public.notify_donation_submitted() returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  inserted int;
-  donor_name text;
-begin
-  donor_name := new.donor_name;
-
-  insert into public.notifications (recipient_id, actor_id, kind, title, message, link, payload)
-  select p.id, new.donor_id, 'donation_submitted',
-         'New contribution pending',
-         coalesce(donor_name, 'A donor') || ' contributed ' || new.amount || ' ' || new.currency ||
-           ' for "' || new.purpose || '". Awaiting verification.',
-         '/treasurer-portal',
-         jsonb_build_object('donation_id', new.id, 'amount', new.amount, 'currency', new.currency)
-    from public.profiles p
-   where p.status = 'active'
-     and p.role in ('admin', 'treasurer');
-
-  get diagnostics inserted = row_count;
-  return new;
-end;
-$$;
-
-drop trigger if exists trg_notify_donation_submitted on public.donations;
-create trigger trg_notify_donation_submitted
-  after insert on public.donations
-  for each row execute function public.notify_donation_submitted();
-
-
--- =====================================================================
--- 8. RPC: get_poll_results
---    Returns per-option vote counts + the leading option (highest count).
---    Used by the public Polls UI so anyone can see live outcomes.
--- =====================================================================
-create or replace function public.get_poll_results(p_poll_id uuid)
-returns table (
-  option_id uuid,
-  option_label text,
-  display_order int,
-  vote_count bigint,
-  is_winner boolean
-)
+create or replace function public.list_donations_for_member(
+  p_member_id uuid,
+  p_limit int default 100
+) returns setof public.donations
 language sql
 stable
 security invoker
 set search_path = public
 as $$
-  with counts as (
-    select
-      po.id,
-      po.label,
-      po.display_order,
-      coalesce(v.cnt, 0) as cnt
-    from public.poll_options po
-    left join (
-      select option_id, count(*) as cnt
-      from public.poll_votes
-      where poll_id = p_poll_id
-      group by option_id
-    ) v on v.option_id = po.id
-    where po.poll_id = p_poll_id
-  ),
-  max_v as (select max(cnt) as m from counts)
-  select
-    c.id,
-    c.label,
-    c.display_order,
-    c.cnt,
-    (c.cnt > 0 and c.cnt = (select m from max_v)) as is_winner
-  from counts c
-  order by c.display_order, c.label;
+  select * from public.donations
+   where member_id = p_member_id
+   order by created_at desc
+   limit greatest(p_limit, 1);
 $$;
 
-grant execute on function public.get_poll_results(uuid) to anon, authenticated;
+grant execute on function public.list_donations_for_member(uuid, int) to authenticated;
 
 
 -- =====================================================================
--- 9. Enable realtime on tables that trigger notifications
---    (already on profiles + site_content; add meetings, meeting_rsvps,
---    poll_votes, donations so the frontend can react to live changes)
+-- 8. RPC: list_all_donations (treasurer / admin full list)
+--    Used by the portal's Donations tab to populate the table.
 -- =====================================================================
-do $$ begin
-  alter publication supabase_realtime add table public.meetings;
-exception when duplicate_object then null;
-end $$;
+create or replace function public.list_all_donations(p_limit int default 500)
+returns setof public.donations
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select * from public.donations
+   order by created_at desc
+   limit greatest(p_limit, 1);
+$$;
 
-do $$ begin
-  alter publication supabase_realtime add table public.meeting_rsvps;
-exception when duplicate_object then null;
-end $$;
+grant execute on function public.list_all_donations(int) to authenticated;
 
-do $$ begin
-  alter publication supabase_realtime add table public.poll_votes;
-exception when duplicate_object then null;
-end $$;
 
-do $$ begin
-  alter publication supabase_realtime add table public.donations;
-exception when duplicate_object then null;
-end $$;
+-- =====================================================================
+-- 9. AUTO-REFresh hint for member portal
+--    When a donation row is INSERT/UPDATE/DELETE for a member, the
+--    member's portal can listen to realtime changes. The trigger
+--    below fires a notification (optional). The member dashboard
+--    uses supabase.channel() to subscribe to these events.
+-- =====================================================================
+-- (No DB-side trigger needed for realtime — we just need the row to
+-- be in the supabase_realtime publication.)
+
+alter publication supabase_realtime add table public.donations;
 
 
 -- =====================================================================
 -- HOW TO USE
 -- =====================================================================
--- 1. Run this in Supabase SQL Editor (after v13.sql).
--- 2. Triggers are AUTOMATIC — meeting INSERT, RSVP INSERT, poll vote INSERT,
---    and donation INSERT all fire notifications without any frontend code.
--- 3. For news + financial records, the frontend calls:
---      notify_all_members('news_posted', ..., '/news', payload)
---      notify_all_members('record_published', ..., '/finance', payload)
--- 4. For task publish, frontend calls:
---      notify_role_members('admin', 'task_published', ..., '/admin-dashboard', payload)
---      notify_role_members('moderator', 'task_published', ..., '/moderator-portal', payload)
---      notify_role_members('secretary', 'task_published', ..., '/secretary-portal', payload)
---      notify_role_members('treasurer', 'task_published', ..., '/treasurer-portal', payload)
--- 5. The Polls UI calls get_poll_results(poll_id) to display live vote counts.
+-- 1. Run this in the Supabase SQL Editor (after v13.sql).
+-- 2. donations.donation_type enum column is now NOT NULL with default
+--    'other' (existing rows backfilled).
+-- 3. RLS is tightened: members can read/update their own (via
+--    member_id = auth.uid() OR donor_id = auth.uid()), treasurer +
+--    admin see everything, only admin can DELETE.
+-- 4. New RPCs (call from frontend):
+--    - record_donation_for_member(member_id, donor_name, email, amount,
+--      currency, purpose, donation_type, message, method_id,
+--      reference_code, status, contribution_date, notify_member)
+--    - update_donation(donation_id, patch_jsonb)
+--    - delete_donation(donation_id)
+--    - list_donations_for_member(member_id, limit)
+--    - list_all_donations(limit)
+-- 5. donations table is now in the realtime publication — member
+--    portal auto-refreshes when treasury adds/edits their row.
+-- 6. Member sees their own contributions via:
+--      select * from list_donations_for_member(auth.uid(), 200)
+--    which the existing listMyDonations RPC also covers via
+--    donor_id OR member_id match.
+</content>

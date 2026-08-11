@@ -16,6 +16,7 @@ import { ProfilePhotoUploader } from '../../components/dashboard/ProfilePhotoUpl
 import { NotificationsTab } from '../../components/dashboard/NotificationsTab';
 import { useAuth } from '../../contexts/AuthContext';
 import { toast } from '../../utils/toast';
+import { supabase } from '../../config/supabaseClient';
 import {
   getTasksForMember, updateTaskStatus, getMyDonations,
   recordDonation, getPaymentMethods,
@@ -28,6 +29,7 @@ import type {
   Meeting, MeetingRsvp, MeetingAttendance,
   Poll, PollOption, RsvpResponse,
 } from '../../types/database';
+import { DONATION_TYPE_LABEL } from '../../types/database';
 
 type Tab = 'overview' | 'tasks' | 'contributions' | 'meetings' | 'polls' | 'attendance' | 'profile' | 'notifications';
 
@@ -172,6 +174,28 @@ export const MemberDashboard: React.FC = () => {
     loadMemberData();
   }, [loadMemberData]);
 
+  // Realtime: refresh when treasury/admin adds/edits/deletes a donation
+  // for this member. donations table is in supabase_realtime publication
+  // (added in schema_v14.sql). RLS still applies — only events for this
+  // member's own rows fire the listener.
+  useEffect(() => {
+    if (!profile?.id) return;
+    const channel = supabase
+      .channel(`member-donations-${profile.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'donations',
+          filter: `member_id=eq.${profile.id}`,
+        },
+        () => { loadMemberData(); },
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [profile?.id, loadMemberData]);
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -210,20 +234,21 @@ export const MemberDashboard: React.FC = () => {
     setSubmittingContrib(true);
     try {
       await recordDonation({
-        donor_name: profile.display_name,
-        email: profile.email,
-        amount: contribForm.amount,
-        currency: contribForm.currency,
-        purpose: contribForm.purpose,
-        message: contribForm.message || null,
-        member_id: profile.id,
-        method_id: contribForm.method_id || null,
-        reference_code: contribForm.reference_code || null,
-        proof_url: null,
-        admin_note: null,
-        verified_by: null,
-        verified_at: null,
-      });
+              donor_name: profile.display_name,
+              email: profile.email,
+              amount: contribForm.amount,
+              currency: contribForm.currency,
+              purpose: contribForm.purpose,
+              message: contribForm.message || null,
+              member_id: profile.id,
+              method_id: contribForm.method_id || null,
+              reference_code: contribForm.reference_code || null,
+              proof_url: null,
+              admin_note: null,
+              verified_by: null,
+              donation_type: 'other',
+              verified_at: null,
+            });
       toast.success('Contribution submitted! The admin will verify it shortly.');
       setShowContributeForm(false);
       setContribForm({ amount: 0, currency: 'KES', purpose: 'General', method_id: '', reference_code: '', message: '' });
@@ -627,6 +652,16 @@ export const MemberDashboard: React.FC = () => {
                                 <p className="text-xs text-muted-foreground">
                                   {d.purpose} · {new Date(d.created_at).toLocaleDateString()}
                                 </p>
+                                <p className="text-xs">
+                                  <span className="px-1.5 py-0.5 rounded bg-muted text-foreground font-semibold capitalize">
+                                    {(DONATION_TYPE_LABEL as any)[d.donation_type] ?? d.donation_type}
+                                  </span>
+                                  {d.method_id && (
+                                    <span className="ml-2 text-muted-foreground">
+                                      via {paymentMethods.find((m) => m.id === d.method_id)?.label ?? 'method'}
+                                    </span>
+                                  )}
+                                </p>
                                 {d.reference_code && (
                                   <p className="text-xs text-muted-foreground font-mono">Ref: {d.reference_code}</p>
                                 )}
@@ -641,7 +676,7 @@ export const MemberDashboard: React.FC = () => {
                               </span>
                             </div>
                           ))}
-                                                  </div>
+                        </div>
                                                 )}
                                               </CardContent>
                                             </Card>
