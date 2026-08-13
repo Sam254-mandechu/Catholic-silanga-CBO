@@ -19,6 +19,7 @@ import type {
   Donation, Profile, PaymentMethod, DonationType,
 } from '../../types/database';
 import { DONATION_TYPE_LABEL, DONATION_TYPES } from '../../types/database';
+import { useAuth } from '../../contexts/AuthContext';
 
 const CURRENCY = 'KES';
 
@@ -93,6 +94,8 @@ export const DonationsTab: React.FC<Props> = ({
   const [deleting, setDeleting] = useState<Donation | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+
+  const { isFinancePrivileged } = useAuth();
 
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
   const methodById = useMemo(() => new Map(paymentMethods.map((p) => [p.id, p])), [paymentMethods]);
@@ -415,10 +418,12 @@ export const DonationsTab: React.FC<Props> = ({
                               </Button>
                             </>
                           )}
-                          <Button size="sm" variant="outline" disabled={acting === d.id}
-                            onClick={() => openEdit(d)} leftIcon={<Pencil className="w-3.5 h-3.5" />}>
-                            Edit
-                          </Button>
+                          {isFinancePrivileged() && (
+                            <Button size="sm" variant="outline" disabled={acting === d.id}
+                              onClick={() => openEdit(d)} leftIcon={<Pencil className="w-3.5 h-3.5" />}>
+                              Edit
+                            </Button>
+                          )}
                           {canDelete && (
                             <Button size="sm" variant="outline" disabled={acting === d.id}
                               onClick={() => setDeleting(d)}
